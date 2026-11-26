@@ -1,0 +1,12 @@
+*
+!frontend/
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/angular.json
+!frontend/tsconfig*.json
+!frontend/.postcssrc.json
+!frontend/src/
+!frontend/src/**
+!infra/
+!infra/nginx/
+!infra/nginx/gridiq.conf

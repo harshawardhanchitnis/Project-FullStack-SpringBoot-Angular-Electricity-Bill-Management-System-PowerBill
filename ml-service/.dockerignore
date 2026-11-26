@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!app/
+!app/**
+!pyproject.toml
+**/__pycache__/

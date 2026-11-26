@@ -1,0 +1,72 @@
+spring:
+  application:
+    name: gridiq-core
+  config:
+    import:
+      - optional:configtree:/run/gridiq/db/
+      - optional:configtree:/run/gridiq/cache/
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/${DB_NAME:powerbill}?currentSchema=gridiq,public
+    username: ${DB_USER:powerbill}
+    password: ${DB_PASSWORD:${db-password:}}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      password: ${REDIS_PASSWORD:${redis-password:}}
+      connect-timeout: 2s
+      timeout: 2s
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    default-schema: gridiq
+  mail:
+    host: ${SMTP_HOST:localhost}
+    port: ${SMTP_PORT:1025}
+  mvc:
+    problemdetails:
+      enabled: true
+  modulith:
+    events:
+      jdbc:
+        schema-initialization:
+          enabled: false
+server:
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+  shutdown: graceful
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        readiness:
+          include: readinessState,db,redis
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+logging:
+  structured:
+    format:
+      console: ecs
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
