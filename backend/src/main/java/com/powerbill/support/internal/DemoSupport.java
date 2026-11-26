@@ -83,13 +83,13 @@ class DemoSupport implements ApplicationRunner {
 
         var meter = ticket(demo, "13", "METER_FAULT", "Meter display is blank",
                 "The smart meter display has been blank for two days, but the supply is normal.",
-                now.minus(Duration.ofDays(4)), false);
+                now.minus(Duration.ofHours(6)), false);
         progress(meter, field, "IN_PROGRESS", null);
         progress(meter, field, "RESOLVED", "Replaced the faulty display module. Interval data was unaffected.");
 
         var solar = ticket(demo, "12", "SOLAR_NET_METERING", "Solar export credit not shown",
                 "Export units from my rooftop solar are not reflected in the latest bill.",
-                now.minus(Duration.ofDays(9)), true);
+                now.minus(Duration.ofHours(30)), true);
         progress(solar, agent, "IN_PROGRESS", null);
         progress(solar, agent, "RESOLVED",
                 "Export credit was carried forward in kWh under the net metering policy and appears on the invoice.");

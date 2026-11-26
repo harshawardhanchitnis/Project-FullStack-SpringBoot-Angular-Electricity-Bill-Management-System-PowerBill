@@ -42,6 +42,23 @@ class JsonCache {
         return value;
     }
 
+    <T> java.util.Optional<T> read(String key, Class<T> type) {
+        try {
+            String cached = redis.opsForValue().get(PREFIX + key);
+            return cached == null ? java.util.Optional.empty() : java.util.Optional.of(json.readValue(cached, type));
+        } catch (DataAccessException | JacksonException error) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    void put(String key, Object value, Duration ttl) {
+        try {
+            redis.opsForValue().set(PREFIX + key, json.writeValueAsString(value), ttl);
+        } catch (DataAccessException | JacksonException error) {
+            LOG.debug("Analytics cache write skipped ({})", error.getClass().getSimpleName());
+        }
+    }
+
     void evict(String key) {
         try {
             redis.delete(PREFIX + key);

@@ -13,4 +13,4 @@ if [ ! -s /run/gridiq/ml/ml-api-key ]; then
   mv "$temporary" /run/gridiq/ml/ml-api-key
 fi
 
-exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log
+exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers "${GRIDIQ_ML_WORKERS:-2}" --no-access-log

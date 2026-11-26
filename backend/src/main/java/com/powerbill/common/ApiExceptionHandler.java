@@ -31,7 +31,8 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         if (body instanceof ProblemDetail problem && request instanceof ServletWebRequest servletRequest) {
             problem.setProperty(CorrelationIdFilter.ATTRIBUTE,
                     servletRequest.getRequest().getAttribute(CorrelationIdFilter.ATTRIBUTE));
-            if (status.is5xxServerError()) {
+            // Unexpected failures never leak details; deliberate 503 responses keep their safe message.
+            if (status.is5xxServerError() && status.value() != 503) {
                 problem.setDetail("The server could not complete the request.");
             }
         }

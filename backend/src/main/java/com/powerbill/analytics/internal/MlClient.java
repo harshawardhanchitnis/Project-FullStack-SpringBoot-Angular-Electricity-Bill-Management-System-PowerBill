@@ -19,6 +19,7 @@ import tools.jackson.databind.JsonNode;
 class MlClient {
     private static final Logger LOG = LoggerFactory.getLogger(MlClient.class);
     private final RestClient client;
+    private final RestClient fastClient;
     private final boolean enabled;
 
     MlClient(@Value("${gridiq.ml.enabled:true}") boolean enabled,
@@ -28,10 +29,15 @@ class MlClient {
             @Value("${gridiq.ml.timeout:PT25S}") Duration timeout) {
         String apiKey = configuredKey.isBlank() ? generatedKey.strip() : configuredKey.strip();
         this.enabled = enabled && !apiKey.isBlank();
-        var factory = new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2))
-                .build());
+        var http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
+        var factory = new JdkClientHttpRequestFactory(http);
         factory.setReadTimeout(timeout);
+        // Forecasts and anomaly scans fail fast to the run-rate fallback; the copilot may wait for a local LLM.
+        var fastFactory = new JdkClientHttpRequestFactory(http);
+        fastFactory.setReadTimeout(Duration.ofSeconds(8));
         this.client = RestClient.builder().baseUrl(url).requestFactory(factory)
+                .defaultHeader("X-Internal-Api-Key", apiKey).build();
+        this.fastClient = RestClient.builder().baseUrl(url).requestFactory(fastFactory)
                 .defaultHeader("X-Internal-Api-Key", apiKey).build();
         if (!this.enabled) {
             LOG.info("The ML service is disabled; forecasts use the run-rate fallback.");
@@ -47,7 +53,8 @@ class MlClient {
             return Optional.empty();
         }
         try {
-            return Optional.ofNullable(client.post().uri(path).contentType(MediaType.APPLICATION_JSON)
+            RestClient target = path.contains("/copilot/") ? client : fastClient;
+            return Optional.ofNullable(target.post().uri(path).contentType(MediaType.APPLICATION_JSON)
                     .header("X-Request-Id", correlationId == null ? "gridiq-core" : correlationId)
                     .body(body).retrieve().body(JsonNode.class));
         } catch (RestClientException error) {

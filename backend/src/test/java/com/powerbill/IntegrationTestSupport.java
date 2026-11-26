@@ -86,8 +86,17 @@ abstract class IntegrationTestSupport {
         return response;
     }
 
+    /** Demo sessions are reused across suites so the login rate limit (five a minute) is not exhausted. */
+    private static final java.util.Map<String, String> DEMO_TOKENS = new java.util.concurrent.ConcurrentHashMap<>();
+
     String demoToken(String name) throws Exception {
-        return token(login(name + "@demo.powerbill.invalid", DEMO_PASSWORD));
+        String cached = DEMO_TOKENS.get(name);
+        if (cached != null && call("GET", "/auth/me", null, cached, null).statusCode() == 200) {
+            return cached;
+        }
+        String fresh = token(login(name + "@demo.powerbill.invalid", DEMO_PASSWORD));
+        DEMO_TOKENS.put(name, fresh);
+        return fresh;
     }
 
     Map<String, Object> registration(String email, String phone) {

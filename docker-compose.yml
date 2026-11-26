@@ -94,6 +94,7 @@ services:
       GRIDIQ_ML_LLM_API_KEY: ${LLM_API_KEY:-}
       GRIDIQ_ML_OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       GRIDIQ_ML_OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      GRIDIQ_ML_WORKERS: ${ML_WORKERS:-2}
     volumes:
       - ml-credentials:/run/gridiq/ml
       - ./infra/docker/start-ml.sh:/opt/gridiq/start-ml.sh:ro

@@ -55,6 +55,19 @@ def inr(value: Any) -> str:
     return f"{sign}₹{whole}.{fraction}"
 
 
+MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+          "November", "December"]
+
+
+def period(value: str) -> str:
+    """Formats a YYYY-MM billing period as 'October 2026'."""
+    try:
+        year, month = value.split("-")
+        return f"{MONTHS[int(month) - 1]} {year}"
+    except (ValueError, IndexError):
+        return value
+
+
 def kwh(value: Any) -> str:
     return f"{float(value):,.2f} kWh".replace(".00 kWh", " kWh")
 
@@ -115,8 +128,8 @@ def bill_change(context: dict[str, Any], answer: Answer) -> None:
     change = delta_total / float(previous["totalInr"]) * 100 if float(previous["totalInr"]) else 0
     direction = "higher" if delta_total >= 0 else "lower"
     answer.lines.append(
-        f"Your **{latest['period']}** bill ({latest['billNumber']}) is **{inr(latest['totalInr'])}**, "
-        f"{inr(abs(delta_total))} {direction} than {previous['period']} ({inr(previous['totalInr'])}), "
+        f"Your **{period(latest['period'])}** bill ({latest['billNumber']}) is **{inr(latest['totalInr'])}**, "
+        f"{inr(abs(delta_total))} {direction} than {period(previous['period'])} ({inr(previous['totalInr'])}), "
         f"a change of {abs(change):.1f}%.")
     answer.lines.append("")
     answer.lines.append(f"- Imported energy went from {kwh(previous['importKwh'])} to {kwh(latest['importKwh'])} "
@@ -148,7 +161,8 @@ def explain_bill(context: dict[str, Any], answer: Answer) -> None:
                             "billing month of validated readings.")
         return
     bill = bills[0]
-    answer.lines.append(f"Your **{bill['period']}** bill ({bill['billNumber']}) totals **{inr(bill['totalInr'])}** "
+    answer.lines.append(f"Your **{period(bill['period'])}** bill ({bill['billNumber']}) totals "
+                        f"**{inr(bill['totalInr'])}** "
                         f"for {kwh(bill['importKwh'])} imported. Status: {bill['status'].replace('_', ' ').lower()}"
                         f", due {bill['dueDate']}.")
     answer.lines.append("")
@@ -164,7 +178,7 @@ def forecast(context: dict[str, Any], answer: Answer) -> None:
         answer.lines.append("A forecast is not available yet. It needs at least two weeks of readings.")
         return
     bill, energy = data["projectedBillInr"], data["projectedKwh"]
-    answer.lines.append(f"For **{data['cycle']}**, you have used {kwh(data['importKwhToDate'])} so far. The "
+    answer.lines.append(f"For **{period(data['cycle'])}**, you have used {kwh(data['importKwhToDate'])} so far. The "
                         f"projected bill is **{inr(bill['p50'])}** (likely range {inr(bill['p10'])} to "
                         f"{inr(bill['p90'])}) for about {kwh(energy['p50'])}.")
     if data.get("daysToNextSlab") not in (None, "none"):
@@ -227,7 +241,7 @@ def solar(context: dict[str, Any], answer: Answer) -> None:
     bills = context.get("bills", [])
     if bills:
         bill = bills[0]
-        answer.lines.append(f"In {bill['period']} you imported {kwh(bill['importKwh'])} and exported "
+        answer.lines.append(f"In {period(bill['period'])} you imported {kwh(bill['importKwh'])} and exported "
                             f"{kwh(bill['exportKwh'])} from rooftop solar.")
     answer.lines.append("Exports first offset imports in the same cycle. " + (
         "Any surplus is carried forward as a kWh credit to the next bill." if policy == "CARRY_FORWARD"
@@ -287,7 +301,8 @@ def overview(context: dict[str, Any], answer: Answer) -> None:
     answer.lines.append("")
     if context.get("bills"):
         bill = context["bills"][0]
-        answer.lines.append(f"- Latest bill: {bill['period']}, {inr(bill['totalInr'])} ({bill['status'].lower()}).")
+        answer.lines.append(f"- Latest bill: {period(bill['period'])}, {inr(bill['totalInr'])} "
+                            f"({bill['status'].lower()}).")
     if context.get("forecast"):
         answer.lines.append(f"- This month so far: {kwh(context['forecast']['importKwhToDate'])}; projected bill "
                             f"{inr(context['forecast']['projectedBillInr']['p50'])}.")
@@ -329,14 +344,15 @@ def triage(complaint_data: dict[str, Any], context: dict[str, Any], linked: dict
         latest, previous = bills[0], bills[1]
         delta = float(latest["importKwh"]) - float(previous["importKwh"])
         pct = delta / float(previous["importKwh"]) * 100 if float(previous["importKwh"]) else 0
-        evidence.append(f"{latest['period']}: {kwh(latest['importKwh'])}, {inr(latest['totalInr'])}; "
-                        f"{previous['period']}: {kwh(previous['importKwh'])}, {inr(previous['totalInr'])}.")
+        evidence.append(f"{period(latest['period'])}: {kwh(latest['importKwh'])}, {inr(latest['totalInr'])}; "
+                        f"{period(previous['period'])}: {kwh(previous['importKwh'])}, {inr(previous['totalInr'])}.")
         if _slab_count(latest) > _slab_count(previous):
             evidence.append(f"Usage reached slab {_slab_count(latest)} (slab {_slab_count(previous)} before).")
         if pct >= 10:
             cause = f"Consumption rose {pct:.1f}%, which explains the higher bill; tariff charges were applied " \
                     "correctly."
-            response = (f"We reviewed your {latest['period']} bill. Your meter recorded {kwh(latest['importKwh'])} "
+            response = (f"We reviewed your {period(latest['period'])} bill. Your meter recorded "
+                        f"{kwh(latest['importKwh'])} "
                         f"compared with {kwh(previous['importKwh'])} the month before, so more units were charged"
                         + (f", including units in slab {_slab_count(latest)}" if _slab_count(latest) >
                            _slab_count(previous) else "") + ". The bill is correct. Shifting evening usage to "
@@ -366,12 +382,20 @@ def triage(complaint_data: dict[str, Any], context: dict[str, Any], linked: dict
         cause = ("Meter data shows matching anomalies; a field inspection is needed." if related
                  else "No matching anomaly in recent telemetry; inspect the installation on site.")
         checks.append("Schedule a field visit and record a check-meter reading.")
+        if kind == "VOLTAGE_FLUCTUATION":
+            checks.append("Check the service cable, neutral connection and distribution transformer loading.")
+            response = ("We have scheduled a field engineer to check the voltage at your premises and the local "
+                        "transformer. Until then, please switch sensitive equipment to a stabiliser.")
+        else:
+            response = ("We have scheduled a field engineer to inspect your meter. Your supply is not affected, and "
+                        "no bill is issued from readings that fail our checks until the meter is verified.")
     elif kind == "SOLAR_NET_METERING" and bills:
         latest = bills[0]
-        evidence.append(f"{latest['period']}: imported {kwh(latest['importKwh'])}, exported "
+        evidence.append(f"{period(latest['period'])}: imported {kwh(latest['importKwh'])}, exported "
                         f"{kwh(latest['exportKwh'])}.")
         cause = "Exports are netted against imports; surplus is carried forward as kWh credit per tariff policy."
-        response = (f"In {latest['period']} your meter recorded {kwh(latest['exportKwh'])} of solar export, which "
+        response = (f"In {period(latest['period'])} your meter recorded {kwh(latest['exportKwh'])} of solar "
+                    "export, which "
                     "was offset against your imports. Any surplus is carried forward to your next bill.")
     for item in anomalies[:2]:
         if not any(item["anomalyType"].replace("_", " ").title() in line for line in evidence):

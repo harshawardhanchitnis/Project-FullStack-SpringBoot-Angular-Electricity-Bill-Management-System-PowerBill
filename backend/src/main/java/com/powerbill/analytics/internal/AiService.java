@@ -208,12 +208,19 @@ class AiService {
         LocalDate today = LocalDate.now(ForecastService.INDIA);
         for (ServicePoint point : accounts.billableServicePoints()) {
             var account = point.account();
+            ForecastService.Forecast forecast;
+            try {
+                // Warms the forecast cache for every meter, then alerts only customers with a budget.
+                forecast = forecasts.forecast(point, today, correlationId);
+            } catch (RuntimeException error) {
+                LOG.debug("Skipped a forecast ({})", error.getClass().getSimpleName());
+                continue;
+            }
             if (account.monthlyBudgetInr() == null || account.monthlyBudgetInr().signum() == 0
                     || today.getDayOfMonth() < 5) {
                 continue;
             }
             try {
-                var forecast = forecasts.forecast(point, today, correlationId);
                 BigDecimal projected = forecast.projectedBillInr().p50();
                 String reason = null;
                 if (projected.compareTo(account.monthlyBudgetInr()) > 0) {

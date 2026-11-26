@@ -31,14 +31,46 @@ class ForecastService {
     private final MeterUsage usage;
     private final TariffPricing pricing;
     private final MlClient ml;
+    private final JsonCache cache;
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<Forecast>>
+            inFlight = new java.util.concurrent.ConcurrentHashMap<>();
 
-    ForecastService(MeterUsage usage, TariffPricing pricing, MlClient ml) {
+    ForecastService(MeterUsage usage, TariffPricing pricing, MlClient ml, JsonCache cache) {
         this.usage = usage;
         this.pricing = pricing;
         this.ml = ml;
+        this.cache = cache;
     }
 
+    /** Forecasts are cached per meter and day for 20 minutes; dashboards, the copilot and alerts share them. */
     Forecast forecast(ServicePoint point, LocalDate today, String correlationId) {
+        String key = "forecast:" + point.meterId() + ":" + today;
+        var cached = cache.read(key, Forecast.class);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+        // Single flight: concurrent requests for the same meter and day share one model call.
+        var mine = new java.util.concurrent.CompletableFuture<Forecast>();
+        var running = inFlight.putIfAbsent(key, mine);
+        if (running != null) {
+            return running.join();
+        }
+        try {
+            Forecast forecast = compute(point, today, correlationId);
+            // Model forecasts are reused for 20 minutes; a fallback only briefly, so the model replaces it on recovery.
+            cache.put(key, forecast, forecast.source().equals("ml")
+                    ? java.time.Duration.ofMinutes(20) : java.time.Duration.ofMinutes(1));
+            mine.complete(forecast);
+            return forecast;
+        } catch (RuntimeException error) {
+            mine.completeExceptionally(error);
+            throw error;
+        } finally {
+            inFlight.remove(key, mine);
+        }
+    }
+
+    private Forecast compute(ServicePoint point, LocalDate today, String correlationId) {
         YearMonth cycle = YearMonth.from(today);
         LocalDate start = cycle.atDay(1);
         LocalDate end = cycle.plusMonths(1).atDay(1);
