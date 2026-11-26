@@ -24,6 +24,10 @@ spring:
   mail:
     host: ${SMTP_HOST:localhost}
     port: ${SMTP_PORT:1025}
+    properties:
+      mail.smtp.connectiontimeout: 3000
+      mail.smtp.timeout: 3000
+      mail.smtp.writetimeout: 3000
   mvc:
     problemdetails:
       enabled: true
@@ -60,11 +64,26 @@ logging:
   structured:
     format:
       console: ecs
+gridiq:
+  auth:
+    signing-secret: ${JWT_SECRET:}
+    local-signing-secret: ${jwt-local-secret:}
+    cookie-secure: true
+    frontend-url: ${PUBLIC_APP_URL:http://127.0.0.1:8080}
+    mail-from: ${MAIL_FROM:gridiq@example.invalid}
+  demo:
+    enabled: ${DEMO_MODE:false}
+    password: ${DEMO_PASSWORD:}
 ---
 spring:
   config:
     activate:
-      on-profile: dev
+      on-profile: dev & !prod
+server:
+  forward-headers-strategy: native
+gridiq:
+  auth:
+    cookie-secure: false
 springdoc:
   api-docs:
     enabled: true

@@ -1,5 +1,8 @@
 package com.powerbill.common;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +13,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.ServletWebRequest;
@@ -31,7 +35,20 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 problem.setDetail("The server could not complete the request.");
             }
         }
-        return super.createResponseEntity(body, headers, status, request);
+        HttpHeaders responseHeaders = new HttpHeaders(headers);
+        responseHeaders.setCacheControl("no-store");
+        return super.createResponseEntity(body, responseHeaders, status, request);
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleMethodArgumentNotValid(MethodArgumentNotValidException error,
+            HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        Map<String, String> errors = new LinkedHashMap<>();
+        error.getBindingResult().getFieldErrors().forEach(field ->
+                errors.putIfAbsent(field.getField(), field.getDefaultMessage()));
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, "One or more fields are invalid.");
+        problem.setProperty("fieldErrors", errors);
+        return handleExceptionInternal(error, problem, headers, status, request);
     }
 
     @ExceptionHandler(AccessDeniedException.class)
