@@ -59,6 +59,10 @@ class DemoConsumers implements ApplicationRunner {
         UUID user = identity.seedDemoCustomer(email, password, name, phone);
         UUID account = UUID.randomUUID();
         store.insertAccount(account, user, number, name, type, email, phone);
+        if (index <= 6) {
+            db.sql("UPDATE consumer_accounts SET monthly_budget_inr=? WHERE id=?")
+                    .params(BigDecimal.valueOf(900L + index * 150L), account).update();
+        }
         UUID premise = UUID.randomUUID();
         store.insertPremise(premise, account, new ConsumerRequests.Premise(
                 "Primary service", sequence + " Demo Utility Road", city, "Maharashtra", pincode, city, null, null));

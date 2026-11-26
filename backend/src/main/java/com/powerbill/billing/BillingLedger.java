@@ -30,6 +30,10 @@ public interface BillingLedger {
 
     Receivables receivables(UUID accountId);
 
+    List<LineItem> lineItems(UUID billId);
+
+    record LineItem(String category, String description, BigDecimal units, BigDecimal rate, BigDecimal amount) {}
+
     record Payable(UUID billId, String billNumber, String status, BigDecimal principalDue, BigDecimal lateFeeDue,
             LocalDate dueDate) {
         public BigDecimal totalDue() {

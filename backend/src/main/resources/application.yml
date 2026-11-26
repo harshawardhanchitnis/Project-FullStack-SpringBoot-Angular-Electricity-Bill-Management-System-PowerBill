@@ -5,6 +5,7 @@ spring:
     import:
       - optional:configtree:/run/gridiq/db/
       - optional:configtree:/run/gridiq/cache/
+      - optional:configtree:/run/gridiq/ml/
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:5432/${DB_NAME:powerbill}?currentSchema=gridiq,public
     username: ${DB_USER:powerbill}
@@ -31,6 +32,9 @@ spring:
   mvc:
     problemdetails:
       enabled: true
+  jackson:
+    deserialization:
+      fail-on-null-for-primitives: false
   modulith:
     events:
       jdbc:
@@ -74,6 +78,12 @@ gridiq:
   demo:
     enabled: ${DEMO_MODE:false}
     password: ${DEMO_PASSWORD:}
+  payments:
+    webhook-secret: ${PAYMENT_WEBHOOK_SECRET:}
+  ml:
+    enabled: ${ML_ENABLED:true}
+    url: ${ML_SERVICE_URL:http://ml-service:8000}
+    api-key: ${INTERNAL_ML_API_KEY:${ml-api-key:}}
 ---
 spring:
   config:

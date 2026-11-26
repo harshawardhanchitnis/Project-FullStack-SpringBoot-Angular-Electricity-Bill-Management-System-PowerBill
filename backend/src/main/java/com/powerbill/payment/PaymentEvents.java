@@ -8,7 +8,7 @@ public final class PaymentEvents {
     private PaymentEvents() {}
 
     public record PaymentSucceeded(UUID paymentId, String paymentReference, UUID accountId, UUID userId,
-            BigDecimal amount, String method, List<String> billNumbers) {}
+            BigDecimal amount, String method, List<String> billNumbers, java.time.Instant occurredAt) {}
 
     public record PaymentFailed(UUID paymentId, String paymentReference, UUID accountId, UUID userId,
             BigDecimal amount, String reason) {}

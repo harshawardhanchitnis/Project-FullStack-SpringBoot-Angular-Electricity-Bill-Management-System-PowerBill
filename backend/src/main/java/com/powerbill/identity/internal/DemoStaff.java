@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @Profile("dev & !prod")
 @ConditionalOnProperty(name = "gridiq.demo.enabled", havingValue = "true")
+@org.springframework.core.annotation.Order(5)
 class DemoStaff implements ApplicationRunner {
     private static final Map<String, String> ROLES = Map.of("billing", "BILLING_OFFICER",
             "support", "SUPPORT_AGENT", "field", "FIELD_ENGINEER", "admin", "SUPER_ADMIN");

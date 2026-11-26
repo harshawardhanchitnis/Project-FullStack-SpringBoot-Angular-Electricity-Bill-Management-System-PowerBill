@@ -210,7 +210,7 @@ class PaymentSettlement {
                 settledAmount.increment(amount.doubleValue());
                 events.publishEvent(new PaymentEvents.PaymentSucceeded(id, payment.paymentReference(),
                         payment.consumerAccountId(), userId, amount, payment.paymentMethod(),
-                        store.allocations(id).stream().map(PaymentStore.Allocation::billNumber).toList()));
+                        store.allocations(id).stream().map(PaymentStore.Allocation::billNumber).toList(), settledAt));
                 events.publishEvent(AuditAction.record("PAYMENT_SETTLED", "PAYMENT", id, userId, "CUSTOMER",
                         new RequestContext("webhook:" + eventId, null, "gateway"),
                         Map.of("reference", payment.paymentReference(), "amount", amount.toPlainString())));

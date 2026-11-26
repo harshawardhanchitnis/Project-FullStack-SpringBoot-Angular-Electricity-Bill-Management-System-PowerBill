@@ -65,14 +65,62 @@ class ReadingStore {
                 .single().orElse(null);
     }
 
-    void anomaly(UUID meterId, Instant start, String type, String severity, int score, String reasons) {
-        db.sql("""
+    java.util.Optional<UUID> anomaly(UUID meterId, Instant start, Instant end, String type, String severity,
+            BigDecimal score, String reasons) {
+        return db.sql("""
                 INSERT INTO meter_anomalies(
                     id,meter_id,window_start,window_end,anomaly_type,severity,score,reason_codes
                 ) VALUES (?,?,?,?,?,?,?,CAST(? AS jsonb))
-                ON CONFLICT (meter_id,window_start,anomaly_type) DO NOTHING
-                """).params(UUID.randomUUID(), meterId, Timestamp.from(start), Timestamp.from(start.plusSeconds(3600)),
-                type, severity, score, reasons).update();
+                ON CONFLICT (meter_id,window_start,anomaly_type) DO NOTHING RETURNING id
+                """).params(UUID.randomUUID(), meterId, Timestamp.from(start), Timestamp.from(end),
+                type, severity, score, reasons).query(UUID.class).optional();
+    }
+
+    List<com.powerbill.metering.MeterUsage.DailyUsage> daily(UUID meter, Instant from, Instant to) {
+        return db.sql("""
+                SELECT CAST(bucket AT TIME ZONE 'Asia/Kolkata' AS date) AS day, import_kwh, export_kwh,
+                    valid_intervals, flagged_intervals
+                FROM daily_meter_usage WHERE meter_id=? AND bucket>=? AND bucket<? ORDER BY bucket
+                """).params(meter, Timestamp.from(from), Timestamp.from(to))
+                .query(com.powerbill.metering.MeterUsage.DailyUsage.class).list();
+    }
+
+    List<com.powerbill.metering.MeterUsage.HourlyUsage> hourly(UUID meter, Instant from, Instant to) {
+        return db.sql("""
+                SELECT local_hour AS hour, coalesce(sum(import_kwh),0) AS import_kwh,
+                    coalesce(sum(export_kwh),0) AS export_kwh
+                FROM tod_bucket_usage WHERE meter_id=? AND bucket>=? AND bucket<? GROUP BY local_hour ORDER BY local_hour
+                """).params(meter, Timestamp.from(from), Timestamp.from(to))
+                .query(com.powerbill.metering.MeterUsage.HourlyUsage.class).list();
+    }
+
+    List<com.powerbill.metering.AnomalyRegistry.Summary> forMeter(UUID meter, int limit) {
+        return db.sql("""
+                SELECT id,anomaly_type,severity,score,status,window_start,window_end,CAST(reason_codes AS text) AS reasons
+                FROM meter_anomalies WHERE meter_id=? ORDER BY detected_at DESC,id LIMIT ?
+                """).params(meter, limit).query(com.powerbill.metering.AnomalyRegistry.Summary.class).list();
+    }
+
+    com.powerbill.metering.AnomalyRegistry.Statistics statistics() {
+        var counts = db.sql("""
+                SELECT count(*) FILTER (WHERE status='OPEN') AS open,
+                    count(*) FILTER (WHERE status='INVESTIGATING') AS investigating,
+                    count(*) FILTER (WHERE status='CONFIRMED_TAMPER') AS tamper,
+                    count(*) FILTER (WHERE status='CONFIRMED_FAULT') AS fault,
+                    count(*) FILTER (WHERE status='FALSE_POSITIVE') AS false_positive
+                FROM meter_anomalies
+                """).query((row, index) -> new int[] {row.getInt("open"), row.getInt("investigating"),
+                row.getInt("tamper"), row.getInt("fault"), row.getInt("false_positive")}).single();
+        var byType = db.sql("""
+                SELECT anomaly_type AS key, count(*) AS count FROM meter_anomalies
+                WHERE status IN ('OPEN','INVESTIGATING') GROUP BY anomaly_type ORDER BY count(*) DESC
+                """).query(com.powerbill.metering.AnomalyRegistry.Count.class).list();
+        var bySeverity = db.sql("""
+                SELECT severity AS key, count(*) AS count FROM meter_anomalies
+                WHERE status IN ('OPEN','INVESTIGATING') GROUP BY severity ORDER BY count(*) DESC
+                """).query(com.powerbill.metering.AnomalyRegistry.Count.class).list();
+        return new com.powerbill.metering.AnomalyRegistry.Statistics(counts[0], counts[1], counts[2], counts[3],
+                counts[4], byType, bySeverity);
     }
 
     List<Reading> readings(UUID meter, Instant from, Instant to) {
@@ -105,9 +153,12 @@ class ReadingStore {
 
     List<Anomaly> anomalies(String status, int limit, int offset) {
         return db.sql("""
-                SELECT id,meter_id,window_start,window_end,anomaly_type,severity,score,status,resolution_notes
-                FROM meter_anomalies WHERE (CAST(:status AS text) IS NULL OR status=:status)
-                ORDER BY detected_at DESC,id DESC LIMIT :limit OFFSET :offset
+                SELECT a.id,a.meter_id,m.meter_serial,a.window_start,a.window_end,a.anomaly_type,a.severity,a.score,
+                    a.status,a.resolution_notes,CAST(a.reason_codes AS text) AS reason_codes,a.detected_at
+                FROM meter_anomalies a JOIN smart_meters m ON m.id=a.meter_id
+                WHERE (CAST(:status AS text) IS NULL OR a.status=:status)
+                ORDER BY CASE a.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
+                    a.detected_at DESC,a.id DESC LIMIT :limit OFFSET :offset
                 """).param("status", status, java.sql.Types.VARCHAR).param("limit", limit).param("offset", offset)
                 .query(Anomaly.class).list();
     }
@@ -115,7 +166,10 @@ class ReadingStore {
     Anomaly resolve(UUID id, UUID staff, String status, String notes) {
         return db.sql("""
                 UPDATE meter_anomalies SET status=?, assigned_to_user_id=?, resolution_notes=?,updated_at=now()
-                WHERE id=? RETURNING id,meter_id,window_start,window_end,anomaly_type,severity,score,status,resolution_notes
+                WHERE id=? RETURNING id,meter_id,
+                    (SELECT meter_serial FROM smart_meters WHERE smart_meters.id=meter_anomalies.meter_id) AS meter_serial,
+                    window_start,window_end,anomaly_type,severity,score,status,resolution_notes,
+                    CAST(reason_codes AS text) AS reason_codes,detected_at
                 """).params(status, staff, notes, id).query(Anomaly.class).optional()
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         org.springframework.http.HttpStatus.NOT_FOUND, "Meter anomaly was not found."));
@@ -123,6 +177,7 @@ class ReadingStore {
 
     record Aggregate(OffsetDateTime bucket, BigDecimal importKwh, BigDecimal exportKwh,
             long validIntervals, long flaggedIntervals) {}
-    record Anomaly(UUID id, UUID meterId, OffsetDateTime windowStart, OffsetDateTime windowEnd,
-            String anomalyType, String severity, BigDecimal score, String status, String resolutionNotes) {}
+    record Anomaly(UUID id, UUID meterId, String meterSerial, OffsetDateTime windowStart, OffsetDateTime windowEnd,
+            String anomalyType, String severity, BigDecimal score, String status, String resolutionNotes,
+            String reasonCodes, OffsetDateTime detectedAt) {}
 }

@@ -28,7 +28,7 @@ import org.springframework.web.server.ResponseStatusException;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
-class MeteringService implements MeterUsage {
+class MeteringService implements MeterUsage, com.powerbill.metering.AnomalyRegistry {
 
     private final ReadingStore store;
     private final MeterDirectory directory;
@@ -69,8 +69,9 @@ class MeteringService implements MeterUsage {
                 if (!reasons.isEmpty()) {
                     flagged++;
                     reasons.forEach(reason -> store.exception(id, input.start(), reason));
-                    store.anomaly(id, input.start(), anomalyType(reasons.getFirst()), "HIGH", 75,
-                            json.writeValueAsString(reasons));
+                    record(id, input.start(), input.start().plusSeconds(3600), anomalyType(reasons.getFirst()), "HIGH",
+                            BigDecimal.valueOf(75), reasons.stream().map(reason -> new Reason(reason, veeDetail(reason)))
+                                    .toList(), "VEE");
                 }
             }
         }
@@ -83,6 +84,47 @@ class MeteringService implements MeterUsage {
     public List<Reading> intervalReadings(UUID meterId, Instant from, Instant to) {
         validateRange(from, to);
         return store.readings(meterId, from, to);
+    }
+
+    @Override
+    @Transactional
+    public java.util.Optional<UUID> record(UUID meterId, Instant windowStart, Instant windowEnd, String type,
+            String severity, BigDecimal score, List<Reason> reasons, String source) {
+        var created = store.anomaly(meterId, windowStart, windowEnd, type, severity, score,
+                json.writeValueAsString(reasons));
+        created.ifPresent(anomaly -> events.publishEvent(new com.powerbill.metering.MeteringEvents.AnomalyFlagged(
+                anomaly, meterId, type, severity, score, reasons.isEmpty() ? type : reasons.getFirst().detail(),
+                windowStart, source)));
+        return created;
+    }
+
+    @Override
+    public List<Summary> forMeter(UUID meterId, int limit) {
+        return store.forMeter(meterId, Math.min(Math.max(limit, 1), 50));
+    }
+
+    @Override
+    public Statistics statistics() {
+        return store.statistics();
+    }
+
+    @Override
+    public List<DailyUsage> dailyUsage(UUID meterId, LocalDate from, LocalDate to) {
+        return store.daily(meterId, from.atStartOfDay(BILLING_ZONE).toInstant(), to.atStartOfDay(BILLING_ZONE).toInstant());
+    }
+
+    @Override
+    public List<HourlyUsage> hourlyProfile(UUID meterId, LocalDate from, LocalDate to) {
+        return store.hourly(meterId, from.atStartOfDay(BILLING_ZONE).toInstant(), to.atStartOfDay(BILLING_ZONE).toInstant());
+    }
+
+    private static String veeDetail(String reason) {
+        return switch (reason) {
+            case "ABOVE_SANCTIONED_LOAD" -> "Hourly import exceeded 1.5x the sanctioned load";
+            case "UNEXPECTED_EXPORT" -> "Energy export recorded on a meter without net metering";
+            case "VOLTAGE_OUTSIDE_RANGE" -> "Voltage outside the 180 V to 270 V band";
+            default -> "Power factor fell below 0.70";
+        };
     }
 
     @Transactional

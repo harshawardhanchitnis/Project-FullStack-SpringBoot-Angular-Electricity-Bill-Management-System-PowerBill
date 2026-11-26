@@ -43,7 +43,7 @@ import org.springframework.web.server.ResponseStatusException;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
-class BillingService implements BillingLedger {
+class BillingService implements BillingLedger, com.powerbill.billing.BillingStatistics {
     static final ZoneId INDIA = MeterUsage.BILLING_ZONE;
     static final int PAYMENT_TERM_DAYS = 15;
     static final RequestContext SYSTEM = new RequestContext("gridiq-billing-scheduler", null, "scheduler");
@@ -375,6 +375,27 @@ class BillingService implements BillingLedger {
         int overdue = (int) open.stream().filter(bill -> bill.status().equals("OVERDUE")).count();
         LocalDate next = open.stream().map(BillRow::dueDate).min(LocalDate::compareTo).orElse(null);
         return new Receivables(open.size(), overdue, principal.setScale(2), fees.setScale(2), next);
+    }
+
+    @Override
+    public List<LineItem> lineItems(UUID billId) {
+        return store.lines(billId).stream().map(line -> new LineItem(line.category(), line.description(), line.units(),
+                line.rate(), line.amount())).toList();
+    }
+
+    @Override
+    public List<MonthlyRevenue> revenueByMonth(int months) {
+        return store.revenue(Math.min(Math.max(months, 1), 36));
+    }
+
+    @Override
+    public List<AgingBucket> aging() {
+        return store.aging();
+    }
+
+    @Override
+    public List<SlabBand> slabDistribution(int months) {
+        return store.slabs(Math.min(Math.max(months, 1), 36));
     }
 
     static BillHeader header(BillRow bill) {

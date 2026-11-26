@@ -94,6 +94,16 @@ class ApiSecurity {
                     routes.requestMatchers("/api/v1/ops/bills/**", "/api/v1/ops/payments/**")
                             .hasAnyRole("BILLING_OFFICER", "SUPER_ADMIN");
                     routes.requestMatchers("/api/v1/ops/tariffs/**").hasAnyRole("BILLING_OFFICER", "SUPER_ADMIN");
+                    routes.requestMatchers("/api/v1/complaints/**", "/api/v1/analytics/**", "/api/v1/ai/**")
+                            .hasRole("CUSTOMER");
+                    routes.requestMatchers("/api/v1/outages/**", "/api/v1/notifications/**").authenticated();
+                    routes.requestMatchers(HttpMethod.GET, "/api/v1/ops/complaints/**")
+                            .hasAnyRole("BILLING_OFFICER", "SUPPORT_AGENT", "FIELD_ENGINEER", "SUPER_ADMIN");
+                    routes.requestMatchers("/api/v1/ops/complaints/**", "/api/v1/ops/outages/**", "/api/v1/ops/ai/**")
+                            .hasAnyRole("SUPPORT_AGENT", "FIELD_ENGINEER", "SUPER_ADMIN");
+                    routes.requestMatchers("/api/v1/ops/analytics/**", "/api/v1/ops/staff")
+                            .hasAnyRole("BILLING_OFFICER", "SUPPORT_AGENT", "FIELD_ENGINEER", "SUPER_ADMIN");
+                    routes.requestMatchers("/api/v1/ops/users/**").hasRole("SUPER_ADMIN");
                     routes.requestMatchers("/api/v1/ops/anomalies/**", "/api/v1/ops/metering/**")
                             .hasAnyRole("BILLING_OFFICER", "FIELD_ENGINEER", "SUPER_ADMIN");
                     routes.requestMatchers("/api/v1/auth/me", "/api/v1/auth/me/preferences",

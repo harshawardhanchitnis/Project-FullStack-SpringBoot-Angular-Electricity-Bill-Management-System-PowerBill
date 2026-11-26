@@ -226,6 +226,59 @@ class BillingStore {
         return db.sql("SELECT * FROM billing_runs ORDER BY started_at DESC LIMIT ?").param(limit).query(Run.class).list();
     }
 
+    List<com.powerbill.billing.BillingStatistics.MonthlyRevenue> revenue(int months) {
+        return db.sql("""
+                WITH periods AS (
+                    SELECT to_char(m, 'YYYY-MM') AS month FROM generate_series(
+                        date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') - make_interval(months => :months),
+                        date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') - interval '1 month', interval '1 month') m
+                ), billed AS (
+                    SELECT to_char(make_date(billing_year, billing_month, 1), 'YYYY-MM') AS month, count(*) AS bills,
+                        sum(total_amount + debit_note_total - credit_note_total) AS billed, sum(net_billable_kwh) AS kwh
+                    FROM bills WHERE status <> 'VOID' GROUP BY 1
+                ), collected AS (
+                    SELECT to_char(paid_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM') AS month, sum(paid_amount) AS collected
+                    FROM bills WHERE paid_at IS NOT NULL GROUP BY 1
+                )
+                SELECT p.month, coalesce(b.bills, 0) AS bills, coalesce(b.billed, 0) AS billed_inr,
+                    coalesce(c.collected, 0) AS collected_inr, coalesce(b.kwh, 0) AS billed_kwh
+                FROM periods p LEFT JOIN billed b ON b.month = p.month LEFT JOIN collected c ON c.month = p.month
+                ORDER BY p.month
+                """).param("months", months).query(com.powerbill.billing.BillingStatistics.MonthlyRevenue.class).list();
+    }
+
+    List<com.powerbill.billing.BillingStatistics.AgingBucket> aging() {
+        return db.sql("""
+                WITH open AS (
+                    SELECT greatest(total_amount + debit_note_total - credit_note_total - (paid_amount - late_fee), 0) AS due,
+                        CAST(now() AT TIME ZONE 'Asia/Kolkata' AS date) - due_date AS days
+                    FROM bills WHERE status IN ('ISSUED','PARTIALLY_PAID','OVERDUE','DISPUTED')
+                ), buckets(bucket, ord, low, high) AS (
+                    VALUES ('Not yet due', 0, -100000, 0), ('1-30 days', 1, 1, 30), ('31-60 days', 2, 31, 60),
+                        ('61-90 days', 3, 61, 90), ('90+ days', 4, 91, 100000)
+                )
+                SELECT b.bucket, count(o.due) AS bills, coalesce(sum(o.due), 0) AS outstanding_inr
+                FROM buckets b LEFT JOIN open o ON o.days BETWEEN b.low AND b.high
+                GROUP BY b.bucket, b.ord ORDER BY b.ord
+                """).query(com.powerbill.billing.BillingStatistics.AgingBucket.class).list();
+    }
+
+    List<com.powerbill.billing.BillingStatistics.SlabBand> slabs(int months) {
+        return db.sql("""
+                WITH bands(band, ord, low, high) AS (
+                    VALUES ('0-100 kWh', 0, 0, 100), ('101-300 kWh', 1, 100.0001, 300), ('301-500 kWh', 2, 300.0001, 500),
+                        ('500+ kWh', 3, 500.0001, 100000000)
+                ), recent AS (
+                    SELECT net_billable_kwh FROM bills
+                    WHERE make_date(billing_year, billing_month, 1) >=
+                        CAST(date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') - make_interval(months => :months) AS date)
+                )
+                SELECT b.band, count(r.net_billable_kwh) AS bills FROM bands b
+                LEFT JOIN recent r ON r.net_billable_kwh BETWEEN b.low AND b.high
+                GROUP BY b.band, b.ord ORDER BY b.ord
+                """).param("months", months).query(com.powerbill.billing.BillingStatistics.SlabBand.class).list();
+    }
+
     record Bill(UUID id, String billNumber, UUID consumerAccountId, UUID meterId, UUID tariffPlanId, UUID billingRunId,
             int billingYear, int billingMonth, LocalDate periodStart, LocalDate periodEnd, int intervalCount,
             BigDecimal importKwh, BigDecimal exportKwh, BigDecimal openingCreditKwh, BigDecimal carriedForwardCreditKwh,
