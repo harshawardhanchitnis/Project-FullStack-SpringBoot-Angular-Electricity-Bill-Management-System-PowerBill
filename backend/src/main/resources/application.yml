@@ -47,6 +47,12 @@ server:
     include-binding-errors: never
   shutdown: graceful
 management:
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+    tags:
+      application: gridiq-core
   endpoints:
     web:
       exposure:

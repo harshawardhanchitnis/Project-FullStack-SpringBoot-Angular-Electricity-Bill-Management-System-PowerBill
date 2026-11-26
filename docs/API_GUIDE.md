@@ -1,30 +1,100 @@
 # GridIQ API guide
 
-The local Core API is available at `http://127.0.0.1:8080/api/v1` through Nginx. Send request bodies as JSON. Error responses use Problem Details, with a correlation ID and field validation errors when applicable.
+All endpoints live under `http://127.0.0.1:8080/api/v1` behind Nginx. Bodies are JSON unless noted. Errors use RFC 9457
+Problem Details with a `correlationId` and, for validation failures, `fieldErrors`. Send `X-Request-Id` to choose the
+correlation ID. With the development profile, Swagger UI is available inside the Compose network at
+`/swagger-ui.html` on the Core API; Nginx does not expose it.
+
+Send `Authorization: Bearer <accessToken>` on protected requests. Lists accept `page` and `size` (at most 100) and
+return `{content, page, size, totalElements}`.
 
 ## Identity
 
-| Method and path | Result |
-| --- | --- |
-| `POST /auth/register` | Registers a residential customer with a premise and default meter. Send email, password, fullName, mobileNumber, and premise. |
-| `POST /auth/login` | Exchanges email and password for a short-lived access token and refresh cookie. |
-| `POST /auth/refresh` | Rotates the refresh cookie and returns a new access token. |
-| `POST /auth/logout` | Revokes the session and clears its cookie. |
-| `POST /auth/verify-email` | Accepts a token from the welcome email. |
-| `POST /auth/forgot-password` | Accepts email and returns HTTP 202 for known and unknown addresses. |
-| `POST /auth/reset-password` | Accepts token and password. It revokes the account's existing sessions. |
-| `POST /auth/change-password` | Accepts currentPassword and newPassword with bearer authentication. |
-| `GET /auth/me` | Returns the authenticated profile. |
-| `PATCH /auth/me/preferences` | Updates theme or budgetAlerts with bearer authentication. |
-
-Send `Authorization: Bearer <accessToken>` on protected requests. Keep the refresh cookie in the client cookie jar. For refresh and logout, send it with `X-GridIQ-Session: 1`. The refresh cookie uses HttpOnly and SameSite=Lax, with Secure enabled outside the local development profile. Email links carry their one-time token in a URL fragment for the Angular authentication screens planned in Phase 6. During API development, take the token from the Mailpit message and submit it to the corresponding API.
-
-The premise fields are label, addressLine, city, state, pincode, regionZone, and optional latitude and longitude. Submit Indian mobile numbers as ten digits and pincodes as six digits. Passwords for registration and password changes require 12–128 characters.
+| Method and path | Who | Result |
+| --- | --- | --- |
+| `POST /auth/register` | Anyone | Creates a residential customer with a premise and default meter, and emails a verification link |
+| `POST /auth/login` | Anyone | Returns a 15-minute access token and sets the `gridiq_refresh` HttpOnly cookie. Limited to 5 attempts a minute per IP and email |
+| `POST /auth/refresh` | Cookie holder | Rotates the refresh cookie. Requires `X-GridIQ-Session: 1`. Returns 204 when there is no cookie; reusing a rotated cookie revokes the session family |
+| `POST /auth/logout` | Cookie holder | Revokes the session family. Requires `X-GridIQ-Session: 1` |
+| `POST /auth/forgot-password`, `POST /auth/reset-password`, `POST /auth/verify-email` | Anyone | Email-token flows. Links carry the token in the URL fragment |
+| `POST /auth/change-password`, `GET /auth/me`, `PATCH /auth/me/preferences` | Signed in | Password change signs out other sessions; preferences are `theme` and `budgetAlerts` |
+| `GET /ops/staff` | Staff | Active agents and engineers for assignment |
+| `GET, POST /ops/users`, `PATCH /ops/users/{id}` | Super admin | Create staff, change role or status. Changes revoke the user's sessions |
 
 ## Consumers and meters
 
-Customers can get or update `/consumers/me`, list `/consumers/me/meters`, add `/consumers/me/premises`, and look up a meter by ID at `/meters/{meterId}`. Meter lookups use the authenticated account and return HTTP 404 for missing or inaccessible meters.
+| Method and path | Who | Result |
+| --- | --- | --- |
+| `GET, PUT /consumers/me`, `GET /consumers/me/meters`, `POST /consumers/me/premises` | Customer | Own account, premises and meters. `PUT` needs the current `version` |
+| `GET /consumers/me/ledger` | Customer | Receivable statement with running balance |
+| `GET, POST /ops/consumers`, `GET, PUT /ops/consumers/{id}`, `PATCH /ops/consumers/{id}/status`, `POST /ops/consumers/{id}/meters` | Billing, support, admin | Directory search (`q`, `type`, `status`), 360° details and audited changes |
+| `GET /ops/consumers/{id}/ledger` | Billing, support, admin | Account statement |
 
-Billing officers, support agents, and super administrators can list and create accounts at `/ops/consumers`, get or update an account at `/ops/consumers/{id}`, patch its status, and add meters. Directory search accepts `q`, `type`, `status`, `page`, and `size`. The count and page use the same filters, with newest accounts first and a stable ID tie-break. Account updates and status changes require the current version. A stale version returns HTTP 409.
+## Metering
 
-Super administrators can read `/ops/audit` with `page` and `size`.
+| Method and path | Who | Result |
+| --- | --- | --- |
+| `GET /meters/{id}/readings?from&to&granularity=hourly\|daily\|monthly` | Owning customer | Daily and monthly ranges must start and end at midnight IST |
+| `GET /meters/{id}/export/csv`, `GET /meters/{id}/export/green-button` | Owning customer | Downloads; flagged hours are omitted |
+| `POST /meters/{id}/readings` | Billing, field, admin | One reading or an array of up to 2,000 hourly readings, each checked by VEE |
+| `POST /meters/{id}/import/csv` (text/csv), `POST /meters/{id}/import/green-button` (Atom XML) | Billing, field, admin | Imports with duplicate detection |
+| `POST /meters/{id}/readings/estimate`, `PATCH /meters/{id}/readings` | Billing, field, admin | Estimate a missing hour from the same hour on prior days, or correct a flagged reading with a reason |
+| `GET /ops/anomalies?status`, `PATCH /ops/anomalies/{id}` | Billing, field, admin | Investigation queue with reason codes. Outcomes: `INVESTIGATING`, `CONFIRMED_FAULT`, `CONFIRMED_TAMPER`, `FALSE_POSITIVE` |
+| `POST /ops/metering/simulate` | Billing, field, admin | Regenerates simulator data for a demo meter |
+
+## Tariffs
+
+| Method and path | Who | Result |
+| --- | --- | --- |
+| `GET /tariffs` | Signed in | Plans in force today |
+| `POST /tariffs/simulate` | Customer | Replays a completed month with `loadShiftPct`, `rooftopSolarKw` and `installedCostInr`; returns both quotes, annual savings and payback |
+| `GET, POST /ops/tariffs`, `PUT /ops/tariffs/{id}`, `PATCH /ops/tariffs/{id}/activate` | Billing, admin | Draft, edit and activate effective-dated versions. Active versions cannot be edited |
+
+## Billing
+
+| Method and path | Who | Result |
+| --- | --- | --- |
+| `GET /bills?status&meterId&year` | Customer | `status` accepts a bill status, `OPEN` (anything unpaid) or `SETTLED` |
+| `GET /bills/summary`, `GET /bills/{id}`, `GET /bills/{id}/pdf` | Customer | Receivables, itemized detail with notes, and the PDF invoice |
+| `GET /ops/bills?accountId&status&year&month&q`, `GET /ops/bills/{id}`, `GET /ops/bills/{id}/pdf` | Billing, support, admin | Bill explorer |
+| `POST /ops/bills/generate` | Billing, admin | `{meterId, year, month}` for a completed month |
+| `POST /ops/bills/runs`, `GET /ops/bills/runs` | Billing, admin | `{year, month, dryRun}`. Real runs need an `Idempotency-Key` UUID header; repeating it returns the same run |
+| `POST /ops/bills/{id}/adjustments` | Billing, admin | `{noteType: CREDIT\|DEBIT, amount, reason}` |
+
+## Payments
+
+| Method and path | Who | Result |
+| --- | --- | --- |
+| `POST /payments/checkout` | Customer | `{billIds, paymentMethod: UPI\|CREDIT_CARD\|DEBIT_CARD\|NET_BANKING}` with an `Idempotency-Key` UUID header. Returns 201, or 200 for a replay; 409 if a bill already has an open checkout; 422 if the key was used for a different request |
+| `POST /payments/sandbox/{id}/confirm` | Customer | `{outcome: SUCCEEDED\|FAILED}`. The sandbox signs a gateway event and posts it to the webhook handler |
+| `POST /webhooks/payments/{provider}` | Gateway | Requires `X-GridIQ-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "t.body">` within five minutes |
+| `GET /payments`, `GET /payments/{id}`, `GET /payments/{id}/receipt/pdf` | Customer | History, allocations and receipts |
+| `GET /ops/payments?status&accountId` | Billing, admin | Payment ledger |
+
+## Support, outages and notifications
+
+| Method and path | Who | Result |
+| --- | --- | --- |
+| `POST, GET /complaints`, `GET /complaints/{id}`, `POST /complaints/{id}/comments`, `POST /complaints/{id}/csat` | Customer | Complaints linked to an own meter or bill. Replying reopens a resolved ticket; rating closes it |
+| `GET /ops/complaints?status&priority&slaBreached&assignedTo&accountId&q`, `GET /ops/complaints/{id}` | Staff | Queue ordered by priority and SLA deadline |
+| `PATCH /ops/complaints/{id}`, `POST /ops/complaints/{id}/comments` | Support, field, admin | Assign, change status or priority, resolve with a summary, and reply or add internal notes. Requires `version` |
+| `GET /outages/active` | Signed in | Customers see incidents for their pincodes; staff see all |
+| `GET, POST /ops/outages`, `PATCH /ops/outages/{id}` | Support, field, admin | Declare and update incidents; affected customers are notified |
+| `GET /notifications`, `PATCH /notifications/{id}/read`, `PATCH /notifications/read-all` | Signed in | Inbox and unread count |
+| `GET /notifications/stream` | Signed in | Server-Sent Events: `ready` with the unread count, then `notification` events |
+
+## Analytics and AI
+
+| Method and path | Who | Result |
+| --- | --- | --- |
+| `GET /analytics/consumer/overview?meterId` | Customer | Cycle usage, slab position, 12-month history, hourly profile, time-of-day split, receivables and outages |
+| `GET /ai/forecast/{meterId}` | Customer | P10/P50/P90 energy and bill for the cycle, days to the next slab, model name and `source` (`ml` or `fallback`) |
+| `POST /ai/copilot/chat` | Customer | `{message, meterId?, history?}`. 20 requests a minute per user |
+| `GET /ops/analytics/executive` | Staff | Revenue, collection efficiency, aging, slab mix, anomalies and SLA statistics |
+| `POST /ops/ai/complaints/{id}/triage` | Support, field, admin | Summary, likely cause, evidence, next steps and a suggested reply |
+| `GET /ops/audit?q` | Super admin | Audit trail filtered by action, entity or correlation ID |
+
+## Internal ML service
+
+Reachable only on the Compose network with `X-Internal-Api-Key`: `POST /ml/v1/forecast`, `POST /ml/v1/anomalies/detect`,
+`POST /ml/v1/copilot/respond` and `POST /ml/v1/copilot/triage`, plus `GET /health` and `GET /metrics`.
