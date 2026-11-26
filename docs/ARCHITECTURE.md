@@ -92,6 +92,32 @@ rephrase the answer; any rephrasing that contains a number absent from the facts
 | Fetch-based Server-Sent Events | The stream carries the bearer token in a header rather than a URL. Persisted notifications remain the source of truth after reconnects. |
 | No inline styles | Components use Tailwind utilities only, so the CSP can keep `style-src 'self'`. |
 
+## Differences from the implementation brief
+
+The project followed the GridIQ implementation brief and roadmap. Where the result differs, it is listed here with
+the reason, so reviewers can tell a deliberate choice from an omission.
+
+| Brief | Built | Reason |
+| --- | --- | --- |
+| PrimeNG components | Tailwind CSS v4 with GridIQ's own components: a dialog and side drawer with a focus trap, pager, KPI card, status badge, empty state, error banner and toasts | PrimeNG and the Angular CDK inject inline styles, which the CSP (`style-src 'self'`) blocks. Keeping the CSP strict mattered more than the library. |
+| LightGBM or XGBoost, and statsmodels | scikit-learn `HistGradientBoostingRegressor` with quantile loss (the same histogram gradient-boosting method) and an additive Holt-Winters model written in NumPy | Fewer native dependencies in the ML image. Forecasts meet the brief's accuracy gate (MAPE under 15% on the synthetic benchmark). |
+| Spring Data JPA with `ddl-auto: validate` | `JdbcClient` and records | See Decisions. The JPA starter is still on the classpath, but no entities are mapped. |
+| WebSocket (STOMP) or Server-Sent Events | Server-Sent Events | The brief allows either. See Decisions. |
+| OpenTelemetry traces | A correlation ID (`X-Request-Id`) passed from Nginx through the Core API to the ML service, and included in logs and error responses | Distributed traces are not exported. Metrics are covered by Micrometer and the optional Prometheus and Grafana profile. |
+| Copilot retrieval with pgvector or FAISS, and model tool calling | TF-IDF retrieval over six local guides. The Core API assembles a read-only context of the customer's bills, forecast, tariff and anomalies, and the answer is built from it. | The knowledge base is small, and building answers from Core API data keeps every figure exact. An optional LLM rewrite is rejected if it introduces a number that is not in that data. |
+| `ledger_entries.running_balance` | Double-entry journals (`ledger_journals` and `ledger_entries`) that must balance at commit; statements calculate the running balance when read | A stored running balance would need serialized writes per account and could drift from the journals. |
+| An `AUTO_PAY` payment method with mandate execution | An `auto_pay_enabled` flag on the account | Mandates are not executed; see Known limits. |
+| Stripe and Razorpay test-mode adapters | The HMAC-signed sandbox gateway. The webhook route takes the provider name, but there is no gateway adapter interface yet. | Running without paid accounts or keys. See Known limits. |
+| Outage statuses `INVESTIGATING` to `RESOLVED` | Adds `SCHEDULED` (migration V6), the starting status for planned maintenance | "Investigating" describes an unplanned fault, not scheduled work. |
+| ML endpoints `/copilot/respond` (brief) or `/copilot/chat` (roadmap) | `/ml/v1/copilot/respond` and `/ml/v1/copilot/triage` | Follows the brief. Triage serves the support desk assistant. |
+| `@defer` blocks for heavy charts | ECharts loaded through a dynamic import on the first chart render | Same effect: ECharts stays out of the initial bundle (94 kB gzipped). |
+| k6 load test with 100 virtual users and a mixed workload (roadmap) | k6 smoke test with 25 virtual users on the customer read paths (p95 of 22 ms) | Meets the brief's smoke gate of p95 under 250 ms. The mixed payment and ingestion workload was not run. |
+
+Roadmap items not built: AT&C loss analytics and a regional loss heatmap, a neighbourhood usage comparison, a Kanban
+view of the support desk, global search, CSV export from tables, README screenshots, and a Lighthouse
+accessibility audit. Interactive API docs are on at `/swagger-ui.html` and `/v3/api-docs` on the Core API in the dev
+profile, and Nginx blocks both at the edge.
+
 ## Versions
 
 | Component | Version |

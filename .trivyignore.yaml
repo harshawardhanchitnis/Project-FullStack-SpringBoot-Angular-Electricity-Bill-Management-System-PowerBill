@@ -1,0 +1,24 @@
+# Vulnerabilities accepted in the container image scan. Each entry states why it cannot be reached in GridIQ and
+# expires, so the scan fails again if the base image has not caught up by then. Remove entries once fixed.
+vulnerabilities:
+  # nginx 1.30.6 in nginxinc/nginx-unprivileged:stable-alpine; fixed in 1.30.7, which nginx.org has not yet published
+  # as an image. GridIQ's nginx serves plain HTTP/1.1 on port 8080 (infra/nginx/gridiq.conf): no mail proxy, no
+  # http2, no HTTP/3 or QUIC, no TLS listener, and no SSI or mirror subrequests.
+  - id: CVE-2026-113425
+    statement: Mail proxy use-after-free; GridIQ configures no mail block.
+    expired_at: 2027-01-31
+  - id: CVE-2026-121810
+    statement: HTTP/3 use-after-free; GridIQ does not enable HTTP/3 or QUIC.
+    expired_at: 2027-01-31
+  - id: CVE-2026-123007
+    statement: HTTP/2 flow control overflow; GridIQ does not enable HTTP/2.
+    expired_at: 2027-01-31
+  - id: CVE-2026-123633
+    statement: HTTP/2 use-after-free; GridIQ does not enable HTTP/2.
+    expired_at: 2027-01-31
+  - id: CVE-2026-118899
+    statement: TLS 1.3 request-body loop; GridIQ has no ssl listener, so this container serves plain HTTP only.
+    expired_at: 2027-01-31
+  - id: CVE-2026-123634
+    statement: Resolver use-after-free needs an SSI or mirror subrequest; GridIQ uses neither.
+    expired_at: 2027-01-31

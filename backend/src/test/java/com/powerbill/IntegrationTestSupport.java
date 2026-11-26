@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
+import com.lowagie.text.pdf.PdfReader;
+import com.lowagie.text.pdf.parser.PdfTextExtractor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -171,6 +173,18 @@ abstract class IntegrationTestSupport {
             Thread.sleep(200);
         }
         throw new AssertionError("The expected email never reached Mailpit");
+    }
+
+    /** Extracts the text of every page so tests can check the figures a customer actually sees in a PDF. */
+    static String pdfText(byte[] pdf) throws Exception {
+        try (var reader = new PdfReader(pdf)) {
+            var extractor = new PdfTextExtractor(reader);
+            var text = new StringBuilder();
+            for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+                text.append(extractor.getTextFromPage(page)).append('\n');
+            }
+            return text.toString();
+        }
     }
 
     boolean mailArrived(String email, String subjectPrefix) throws Exception {

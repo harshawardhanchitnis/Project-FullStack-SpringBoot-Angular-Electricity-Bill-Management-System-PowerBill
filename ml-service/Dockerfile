@@ -3,6 +3,8 @@ FROM python:3.12-slim
 # Small models run fastest single-threaded; scale with uvicorn workers instead of OpenMP threads.
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_DISABLE_PIP_VERSION_CHECK=1     OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 WORKDIR /opt/gridiq
+# Apply Debian security updates between base image releases.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml .
 COPY app ./app
 RUN pip install --no-cache-dir . \

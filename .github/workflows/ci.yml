@@ -96,3 +96,24 @@ jobs:
           scan-ref: .
           severity: HIGH,CRITICAL
           exit-code: "1"
+
+  image-scan:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, frontend, ml-service]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the ${{ matrix.service }} image
+        run: docker compose build ${{ matrix.service }}
+      # Fails on fixable high or critical CVEs; accepted exceptions live in .trivyignore.yaml with reasons and expiry.
+      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          scan-type: image
+          image-ref: powerbill-gridiq-${{ matrix.service }}:latest
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          exit-code: "1"

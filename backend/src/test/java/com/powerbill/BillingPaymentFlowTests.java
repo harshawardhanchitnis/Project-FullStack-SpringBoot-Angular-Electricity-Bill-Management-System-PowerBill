@@ -14,6 +14,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+import com.powerbill.common.PdfKit;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 
@@ -37,6 +38,13 @@ class BillingPaymentFlowTests extends IntegrationTestSupport {
         assertThat(pdf.statusCode()).isEqualTo(200);
         assertThat(pdf.headers().firstValue("Content-Type").orElseThrow()).contains("application/pdf");
         assertThat(new String(pdf.body(), 0, 5)).isEqualTo("%PDF-");
+        // The invoice must print the same itemized figures and total as the ledger, not just be a valid file.
+        String invoice = pdfText(pdf.body());
+        assertThat(invoice).contains(first.path("billNumber").asText(), "Invoice total",
+                PdfKit.inr(detail.path("bill").path("totalAmount").decimalValue()), "Amount due");
+        for (JsonNode line : detail.path("lineItems")) {
+            assertThat(invoice).contains(PdfKit.inr(line.path("amount").decimalValue()));
+        }
         assertThat(bytes("/bills/" + first.path("id").asText() + "/pdf", demoToken("customer07")).statusCode())
                 .isEqualTo(404);
 
@@ -103,6 +111,9 @@ class BillingPaymentFlowTests extends IntegrationTestSupport {
                 .isEqualTo("PAID");
         var receipt = bytes("/payments/" + paymentId + "/receipt/pdf", customer);
         assertThat(new String(receipt.body(), 0, 5)).isEqualTo("%PDF-");
+        assertThat(pdfText(receipt.body())).contains(payment.path("paymentReference").asText(),
+                open.getFirst().path("billNumber").asText(), "Amount received",
+                PdfKit.inr(payment.path("amount").decimalValue()));
 
         var forged = call("POST", "/webhooks/payments/sandbox",
                 Map.of("id", "evt_forged", "type", "payment.succeeded", "data", Map.of("transactionId", paymentId)),

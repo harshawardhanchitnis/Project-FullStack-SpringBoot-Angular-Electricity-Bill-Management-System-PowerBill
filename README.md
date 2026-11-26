@@ -75,6 +75,7 @@ Optional profiles:
 - [API guide](docs/API_GUIDE.md)
 - [Security](docs/SECURITY.md)
 - [Demo accounts](docs/DEMO_ACCOUNTS.md) and the [5-minute walkthrough](docs/DEMO_WALKTHROUGH.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## Project layout
 
