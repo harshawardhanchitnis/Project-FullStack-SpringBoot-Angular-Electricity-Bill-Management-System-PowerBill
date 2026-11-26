@@ -25,7 +25,9 @@
           "configurations": {
             "production": {
               "optimization": {
-                "styles": { "inlineCritical": false }
+                "styles": {
+                  "inlineCritical": false
+                }
               },
               "budgets": [
                 {
@@ -59,7 +61,10 @@
               "buildTarget": "gridiq:build:development"
             }
           },
-          "defaultConfiguration": "development"
+          "defaultConfiguration": "development",
+          "options": {
+            "proxyConfig": "proxy.conf.json"
+          }
         },
         "test": {
           "builder": "@angular/build:unit-test"

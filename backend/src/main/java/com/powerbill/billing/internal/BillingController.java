@@ -47,7 +47,7 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/api/v1")
 class BillingController {
-    private static final String STATUS = "ISSUED|PARTIALLY_PAID|PAID|OVERDUE|DISPUTED|VOID";
+    private static final String STATUS = "ISSUED|PARTIALLY_PAID|PAID|OVERDUE|DISPUTED|VOID|OPEN|SETTLED";
     private final BillingService billing;
     private final BillingStore store;
     private final AccountDirectory accounts;

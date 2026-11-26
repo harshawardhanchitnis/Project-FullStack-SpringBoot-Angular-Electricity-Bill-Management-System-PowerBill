@@ -38,16 +38,23 @@ class AuditLog {
 
     @GetMapping("/api/v1/ops/audit")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
-    Page list(@RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size) {
-        if (page < 0 || size < 1 || size > 100) {
+    Page list(@RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "") String q) {
+        if (page < 0 || size < 1 || size > 100 || q.length() > 80) {
             throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.BAD_REQUEST, "Invalid page or size.");
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "Invalid page, size or filter.");
         }
+        String filter = """
+                 WHERE (:q='' OR strpos(lower(action), :q)>0 OR strpos(lower(entity_type), :q)>0
+                    OR strpos(lower(coalesce(correlation_id,'')), :q)>0)
+                """;
+        String query = q.strip().toLowerCase(java.util.Locale.ROOT).replace(' ', '_');
         List<AuditEntry> rows = db.sql("""
                 SELECT id, actor_user_id, actor_role, action, entity_type, entity_id, correlation_id, created_at
-                FROM audit_logs ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?
-                """).params(size, (long) page * size).query(AuditEntry.class).list();
-        long count = db.sql("SELECT count(*) FROM audit_logs").query(Long.class).single();
+                FROM audit_logs""" + filter + " ORDER BY created_at DESC, id DESC LIMIT :size OFFSET :offset")
+                .param("q", query).param("size", size).param("offset", (long) page * size)
+                .query(AuditEntry.class).list();
+        long count = db.sql("SELECT count(*) FROM audit_logs" + filter).param("q", query).query(Long.class).single();
         return new Page(rows, page, size, count);
     }
 

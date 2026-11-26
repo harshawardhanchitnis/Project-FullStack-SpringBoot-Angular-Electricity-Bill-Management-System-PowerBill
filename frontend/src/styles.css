@@ -1,36 +1,192 @@
 @import 'tailwindcss';
 
-@theme {
-  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
-  --color-grid: #0f172a;
-  --color-electric: #2563eb;
-  --color-solar: #10b981;
-  --color-peak: #f59e0b;
-  --color-alert: #ef4444;
-  --color-off-peak: #06b6d4;
+/*
+ * PowerBill GridIQ design tokens. Colours resolve through light-dark(), so the manual theme toggle only switches
+ * color-scheme on the root element. Components use these utilities and never inject inline <style> blocks, which
+ * keeps the strict Content-Security-Policy intact.
+ */
+@theme inline {
+  --font-sans: Inter, 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-soft: var(--brand-soft);
+  --color-on-brand: var(--on-brand);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-cyan: var(--cyan);
+  --color-cyan-soft: var(--cyan-soft);
+  --color-violet: var(--violet);
 }
 
 :root {
-  font-family: var(--font-sans);
   color-scheme: light dark;
-  --canvas: light-dark(#f3f6fc, #0b1220);
-  --surface: light-dark(#fff, #131e31);
-  --border: light-dark(#dbe3f1, #354665);
-  --text: light-dark(#0f172a, #f0f5ff);
-  --muted: light-dark(#475569, #bac7dd);
-  --accent: light-dark(#1d4ed8, #a5c7ff);
-  --ok: light-dark(#047857, #6ee7b7);
-  --problem: light-dark(#b91c1c, #fca5a5);
+  font-family: var(--font-sans);
+  --canvas: light-dark(#f5f7fb, #0b1120);
+  --surface: light-dark(#ffffff, #111a2c);
+  --raised: light-dark(#ffffff, #16213a);
+  --sunken: light-dark(#eef2f8, #0e1628);
+  --line: light-dark(#dde4ef, #263450);
+  --ink: light-dark(#0f172a, #eef3fb);
+  --muted: light-dark(#475569, #a8b6cc);
+  --faint: light-dark(#64748b, #8597b3);
+  --brand: light-dark(#2563eb, #6f9dff);
+  --brand-strong: light-dark(#1d4ed8, #93b4ff);
+  --brand-soft: light-dark(#e8efff, #17264a);
+  --on-brand: light-dark(#ffffff, #0b1120);
+  --ok: light-dark(#047857, #4ade9f);
+  --ok-soft: light-dark(#e3f7ee, #0f2e24);
+  --warn: light-dark(#b45309, #fbbf4d);
+  --warn-soft: light-dark(#fdf3e1, #33260c);
+  --bad: light-dark(#b91c1c, #fb8a8a);
+  --bad-soft: light-dark(#fdecec, #3a1518);
+  --cyan: light-dark(#0e7490, #4fd1e8);
+  --cyan-soft: light-dark(#e2f6fa, #0d2d36);
+  --violet: light-dark(#6d28d9, #b79cff);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
 }
 
 body {
-  min-width: 280px;
-  min-height: 100vh;
+  min-width: 300px;
+  min-height: 100dvh;
   background: var(--canvas);
-  color: var(--text);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
 }
 
 :focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 4px;
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.num,
+td,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-surface;
+  }
+  .card-pad {
+    @apply rounded-xl border border-line bg-surface p-4 sm:p-5;
+  }
+  .h-page {
+    @apply text-2xl font-semibold tracking-tight text-ink sm:text-[1.65rem];
+  }
+  .h-section {
+    @apply text-base font-semibold text-ink;
+  }
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wide text-faint;
+  }
+  .btn {
+    @apply inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-55;
+  }
+  .btn-primary {
+    @apply inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-55 bg-brand text-on-brand hover:bg-brand-strong;
+  }
+  .btn-secondary {
+    @apply inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-55 border border-line bg-surface text-ink hover:bg-sunken;
+  }
+  .btn-ghost {
+    @apply inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-55 text-muted hover:bg-sunken hover:text-ink;
+  }
+  .btn-danger {
+    @apply inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-55 bg-bad text-white hover:opacity-90;
+  }
+  .btn-sm {
+    @apply min-h-8 px-3 text-xs;
+  }
+  .icon-btn {
+    @apply inline-flex size-10 cursor-pointer items-center justify-center rounded-lg text-muted hover:bg-sunken hover:text-ink;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-ink;
+  }
+  .input {
+    @apply block min-h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm text-ink placeholder:text-faint focus:border-brand focus:outline-2 focus:outline-offset-0 focus:outline-brand aria-[invalid=true]:border-bad;
+  }
+  .hint {
+    @apply mt-1 text-xs text-faint;
+  }
+  .field-error {
+    @apply mt-1 text-xs font-medium text-bad;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold whitespace-nowrap;
+  }
+  .table-wrap {
+    @apply overflow-x-auto rounded-xl border border-line bg-surface;
+  }
+  .table {
+    @apply w-full min-w-[640px] text-left text-sm;
+  }
+  .table th {
+    @apply border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-faint;
+  }
+  .table td {
+    @apply border-b border-line px-4 py-3 align-middle text-ink;
+  }
+  .table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .table tbody tr.clickable {
+    @apply cursor-pointer hover:bg-sunken;
+  }
+  .skeleton {
+    @apply animate-pulse rounded-md bg-sunken;
+  }
+  .tab {
+    @apply inline-flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-3 text-sm font-medium text-muted hover:text-ink aria-selected:bg-surface aria-selected:text-ink aria-selected:shadow-sm;
+  }
+  .tabs {
+    @apply inline-flex flex-wrap gap-1 rounded-lg bg-sunken p-1;
+  }
+  .nav-link {
+    @apply flex min-h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium text-muted hover:bg-sunken hover:text-ink;
+  }
+  .nav-link.active {
+    @apply bg-brand-soft text-brand-strong;
+  }
+  .prose-chat p {
+    @apply my-1.5;
+  }
+  .prose-chat ul {
+    @apply my-1.5 list-disc pl-5;
+  }
+  .prose-chat blockquote {
+    @apply my-2 border-l-2 border-brand pl-3 text-muted;
+  }
+  .prose-chat strong {
+    @apply font-semibold;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

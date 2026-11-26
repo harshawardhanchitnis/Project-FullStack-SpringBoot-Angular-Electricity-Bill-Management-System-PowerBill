@@ -94,7 +94,9 @@ class BillingStore {
         String filter = """
                  WHERE (CAST(:account AS uuid) IS NULL OR b.consumer_account_id=:account)
                    AND (CAST(:meter AS uuid) IS NULL OR b.meter_id=:meter)
-                   AND (CAST(:status AS text) IS NULL OR b.status=:status)
+                   AND (CAST(:status AS text) IS NULL OR b.status=:status
+                        OR (:status='OPEN' AND b.status IN ('ISSUED','PARTIALLY_PAID','OVERDUE','DISPUTED'))
+                        OR (:status='SETTLED' AND b.status IN ('PAID','VOID')))
                    AND (CAST(:year AS integer) IS NULL OR b.billing_year=:year)
                    AND (CAST(:month AS integer) IS NULL OR b.billing_month=:month)
                    AND (:query='' OR strpos(lower(b.bill_number),:query)>0)

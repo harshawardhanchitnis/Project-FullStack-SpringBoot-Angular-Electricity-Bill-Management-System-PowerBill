@@ -53,6 +53,10 @@ class AuthController {
             @RequestHeader(name = "X-GridIQ-Session", required = false) String sessionHeader,
             HttpServletRequest request) {
         requireSessionHeader(sessionHeader);
+        if (token == null || token.isEmpty()) {
+            // No refresh cookie means there is no session to restore: not an error for a fresh page load.
+            return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+        }
         var session = identity.refresh(token, RequestContext.from(request))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED,
                         "The session has expired. Sign in again."));
