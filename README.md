@@ -65,7 +65,7 @@ Optional profiles:
 | --- | --- | --- |
 | Core API, from `backend` | `./mvnw verify` (`mvnw.cmd verify` on Windows) | 43 tests: Testcontainers integration suites, 26 tariff engine cases and the Spring Modulith boundary check; 85% line coverage (JaCoCo report in `target/site/jacoco`) |
 | ML service, from `ml-service` in a Python 3.12+ venv | `pip install -e '.[dev]'`, `ruff check .`, `pytest --cov=app` | 19 tests with 85% coverage, including forecast MAPE under 15%, recall of three injected anomaly scenarios and the copilot grounding guard |
-| Frontend, from `frontend` | `npm ci`, `npm run lint`, `npm test`, `npm run build` | Lint clean, unit tests pass, 456 kB initial bundle (93 kB gzipped) |
+| Frontend, from `frontend` | `npm ci`, `npm run lint`, `npm test`, `npm run build` | Lint clean, unit tests pass, 458 kB initial bundle (94 kB gzipped) |
 | End-to-end, from `frontend` with the demo stack running | `E2E_DEMO_PASSWORD=<DEMO_PASSWORD> npm run e2e` | 14 Playwright journeys covering security headers, payments, Copilot, complaints, staff workflows and 375/768/1440 px layouts |
 | Load smoke | see [k6-smoke.js](tests/load/k6-smoke.js) | p95 of 22 ms with 0% errors at 25 virtual users on the customer read paths |
 

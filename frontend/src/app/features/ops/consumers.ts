@@ -74,7 +74,7 @@ function lastMonth(): { year: number; month: number } {
         <div class="space-y-6 text-sm">
           <section class="flex flex-wrap items-center gap-2">
             <app-badge [status]="d.account.status" />
-            <span class="text-muted">{{ d.account.billingEmail }} · {{ d.account.mobileNumber }}</span>
+            <span class="min-w-0 wrap-anywhere text-muted">{{ d.account.billingEmail }} · {{ d.account.mobileNumber }}</span>
             <label class="sr-only" for="status-change">Change status</label>
             <select id="status-change" class="input ml-auto w-auto" [ngModel]="d.account.status" (ngModelChange)="changeStatus(d.account, $event)">
               <option value="ACTIVE">Active</option><option value="SUSPENDED">Suspended</option><option value="DISCONNECTED">Disconnected</option>

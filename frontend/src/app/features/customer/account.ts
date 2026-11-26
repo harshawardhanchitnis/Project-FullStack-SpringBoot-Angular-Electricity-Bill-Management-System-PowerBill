@@ -15,13 +15,13 @@ import { StatusBadge } from '../../shared/ui';
   template: `
     <h1 class="h-page">Account & meters</h1>
     @if (customer.details(); as details) {
-      <div class="mt-6 grid gap-4 lg:grid-cols-3">
+      <div class="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <section class="card-pad" aria-labelledby="profile-heading">
           <h2 id="profile-heading" class="h-section">Profile</h2>
           <dl class="mt-3 space-y-3 text-sm">
             <div><dt class="text-faint">Name</dt><dd class="font-medium">{{ auth.user()?.fullName }}</dd></div>
             <div><dt class="text-faint">Sign-in email</dt>
-              <dd class="flex items-center gap-2 font-medium">{{ auth.user()?.email }}
+              <dd class="flex flex-wrap items-center gap-2 font-medium"><span class="min-w-0 wrap-anywhere">{{ auth.user()?.email }}</span>
                 @if (auth.user()?.emailVerified) { <span class="badge bg-ok-soft text-ok"><svg lucideBadgeCheck [size]="12" aria-hidden="true"></svg> Verified</span> }
                 @else { <span class="badge bg-warn-soft text-warn">Not verified</span> }</dd></div>
             <div><dt class="text-faint">Consumer number</dt><dd class="num font-medium">{{ details.account.consumerNumber }}</dd></div>
