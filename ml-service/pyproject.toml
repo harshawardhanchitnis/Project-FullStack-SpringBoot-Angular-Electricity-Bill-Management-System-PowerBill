@@ -8,8 +8,10 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi==0.165.0",
+  "numpy==2.4.2",
   "prometheus-fastapi-instrumentator==8.1.0",
   "pydantic-settings==2.16.3",
+  "scikit-learn==1.9.0",
   "uvicorn==0.54.0",
 ]
 
@@ -23,11 +25,15 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+[tool.setuptools.package-data]
+app = ["knowledge/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py312"
+line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

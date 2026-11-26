@@ -83,7 +83,8 @@ gridiq:
   ml:
     enabled: ${ML_ENABLED:true}
     url: ${ML_SERVICE_URL:http://ml-service:8000}
-    api-key: ${INTERNAL_ML_API_KEY:${ml-api-key:}}
+    api-key: ${INTERNAL_ML_API_KEY:}
+    generated-api-key: ${ml-api-key:}
 ---
 spring:
   config:

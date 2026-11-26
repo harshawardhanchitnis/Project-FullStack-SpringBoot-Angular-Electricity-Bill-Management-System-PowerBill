@@ -23,8 +23,10 @@ class MlClient {
 
     MlClient(@Value("${gridiq.ml.enabled:true}") boolean enabled,
             @Value("${gridiq.ml.url:http://ml-service:8000}") String url,
-            @Value("${gridiq.ml.api-key:${ml-api-key:}}") String apiKey,
+            @Value("${gridiq.ml.api-key:}") String configuredKey,
+            @Value("${gridiq.ml.generated-api-key:}") String generatedKey,
             @Value("${gridiq.ml.timeout:PT25S}") Duration timeout) {
+        String apiKey = configuredKey.isBlank() ? generatedKey.strip() : configuredKey.strip();
         this.enabled = enabled && !apiKey.isBlank();
         var factory = new JdkClientHttpRequestFactory(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2))
                 .build());

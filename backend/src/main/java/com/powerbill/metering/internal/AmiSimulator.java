@@ -70,12 +70,13 @@ class AmiSimulator {
                         CAST(:finish AS timestamptz)-interval '1 hour', interval '1 hour') AS t
                 ), load AS (
                     SELECT t, hour, sequence,
-                        CAST(:kw AS numeric) * (0.08 + (CASE WHEN hour BETWEEN 18 AND 22 THEN 0.23
+                        CAST(:kw AS numeric) * 0.4 * (0.08 + (CASE WHEN hour BETWEEN 18 AND 22 THEN 0.23
                             WHEN hour BETWEEN 7 AND 9 THEN 0.14 ELSE 0.06 END)
                             + CASE WHEN month BETWEEN 3 AND 6 THEN 0.10 ELSE 0 END
                             + CASE WHEN day >= 6 THEN 0.03 ELSE 0 END
                             + mod(sequence * 13 + :salt, 19) * 0.004)
-                            + CASE WHEN t >= CAST(:nightFrom AS timestamptz) AND hour < 6 THEN 0.9 ELSE 0 END AS demand,
+                            + CASE WHEN t >= CAST(:nightFrom AS timestamptz) AND hour < 6
+                                THEN CAST(:kw AS numeric) * 0.25 ELSE 0 END AS demand,
                         CAST(:solar AS numeric) * CASE WHEN hour BETWEEN 9 AND 16
                             THEN greatest(0, 0.72 - abs(12.5-hour)*0.15) ELSE 0 END AS generation,
                         CASE WHEN t >= CAST(:tamperFrom AS timestamptz) AND t < CAST(:tamperTo AS timestamptz) THEN 0.03

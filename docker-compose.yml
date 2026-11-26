@@ -63,14 +63,20 @@ services:
       JWT_SECRET: ${JWT_SECRET:-}
       DEMO_MODE: ${DEMO_MODE:-false}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
+      INTERNAL_ML_API_KEY: ${INTERNAL_ML_API_KEY:-}
+      ML_SERVICE_URL: http://ml-service:8000
     volumes:
       - postgres-credentials:/run/gridiq/db:ro
       - redis-credentials:/run/gridiq/cache:ro
+      - ml-credentials:/run/gridiq/ml:ro
     networks: [app, data]
     depends_on:
       postgres-timescale:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      ml-service:
         condition: service_healthy
     healthcheck:
       test: [CMD, curl, --fail, --silent, --output, /dev/null, http://localhost:8080/actuator/health/readiness]
@@ -81,6 +87,16 @@ services:
 
   ml-service:
     build: ./ml-service
+    entrypoint: ["/bin/sh", "/opt/gridiq/start-ml.sh"]
+    environment:
+      GRIDIQ_ML_API_KEY: ${INTERNAL_ML_API_KEY:-}
+      GRIDIQ_ML_COPILOT_PROVIDER: ${COPILOT_PROVIDER:-deterministic}
+      GRIDIQ_ML_LLM_API_KEY: ${LLM_API_KEY:-}
+      GRIDIQ_ML_OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      GRIDIQ_ML_OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+    volumes:
+      - ml-credentials:/run/gridiq/ml
+      - ./infra/docker/start-ml.sh:/opt/gridiq/start-ml.sh:ro
     networks: [app]
     healthcheck:
       test: [CMD, python, -c, "from urllib.request import urlopen; urlopen('http://localhost:8000/health', timeout=2).close()"]
@@ -114,3 +130,4 @@ volumes:
   postgres-credentials:
   redis-72-data:
   redis-credentials:
+  ml-credentials:
