@@ -158,8 +158,7 @@ class AiService {
         context.put("last30DaysImportKwh", AnalyticsService.scale(total));
         context.put("openComplaints", support.openComplaints(account.id()));
         context.put("activeOutages", support.activeOutages(accounts.pincodes(account.id())).stream()
-                .map(outage -> Map.of("title", outage.title(), "status", outage.status(),
-                        "estimatedRestorationAt", String.valueOf(outage.estimatedRestorationAt()))).toList());
+                .map(AiService::outageContext).toList());
         context.put("meterAnomalies", anomalies.forMeter(point.meterId(), 3));
         return context;
     }
@@ -240,6 +239,17 @@ class AiService {
             }
         }
         return alerts;
+    }
+
+    /** Sends the restoration estimate as an ISO-8601 instant only when one is known; the ML service formats it. */
+    private static Map<String, Object> outageContext(SupportDirectory.Outage outage) {
+        var item = new LinkedHashMap<String, Object>();
+        item.put("title", outage.title());
+        item.put("status", outage.status());
+        if (outage.estimatedRestorationAt() != null) {
+            item.put("estimatedRestorationAt", outage.estimatedRestorationAt().toInstant().toString());
+        }
+        return item;
     }
 
     private static final class TooManyRequests extends ResponseStatusException {

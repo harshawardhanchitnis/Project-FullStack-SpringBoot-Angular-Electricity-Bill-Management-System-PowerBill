@@ -109,9 +109,17 @@ class SupportNotificationFlowTests extends IntegrationTestSupport {
         synchronized (lines) {
             assertThat(lines.toString()).contains("event:ready", "event:notification", "Transformer fire");
         }
+        assertThat(json(outage).path("status").asText()).isEqualTo("INVESTIGATING");
         var active = json(call("GET", "/outages/active", null, customer, null));
         assertThat(active.toString()).contains("Transformer fire").doesNotContain("Camp substation");
         assertThat(call("POST", "/ops/outages", Map.of(), customer, null).statusCode()).isEqualTo(403);
+
+        var planned = call("POST", "/ops/outages", Map.of("regionZone", "Pune", "city", "Pune",
+                "affectedPincodes", List.of("411002"), "title", "Feeder upgrade on Station Road",
+                "description", "Supply pauses while the feeder is upgraded.", "severity", "PLANNED"),
+                demoToken("field"), null);
+        assertThat(planned.statusCode()).withFailMessage(planned.body()).isEqualTo(201);
+        assertThat(json(planned).path("status").asText()).isEqualTo("SCHEDULED");
     }
 
     @Test

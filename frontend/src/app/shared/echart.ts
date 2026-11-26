@@ -129,8 +129,14 @@ export function axisStyle(colors: ChartPalette) {
   };
 }
 
+/**
+ * Tooltips render as canvas rich text. ECharts' HTML tooltips build their rows with inline style attributes, which the
+ * strict Content-Security-Policy (style-src 'self') blocks, collapsing the spacing and colour markers. Custom
+ * formatters therefore use "\n" for line breaks, not HTML.
+ */
 export function tooltipStyle(colors: ChartPalette) {
   return {
+    renderMode: 'richText' as const,
     backgroundColor: colors.surface,
     borderColor: colors.line,
     textStyle: { color: colors.ink },

@@ -20,9 +20,11 @@ function tomorrow(): string {
     <h1 class="h-page">Tariff studio</h1>
     <p class="mt-1 text-sm text-muted">Effective-dated, versioned tariffs. Active versions are never edited; publish a new version instead.</p>
     @if (error()) { <div class="mt-4"><app-error [message]="error()!" (retry)="load()" /></div> }
+    <div class="grid grid-cols-1 items-start gap-x-4 lg:grid-cols-2 2xl:grid-cols-3">
     @for (group of groups(); track group.type) {
+      <div class="min-w-0">
       <h2 class="h-section mt-8">{{ group.type | humanize }}</h2>
-      <div class="mt-3 grid gap-4 lg:grid-cols-2">
+      <div class="mt-3 grid gap-4">
         @for (plan of group.plans; track plan.id) {
           <section class="card-pad">
             <div class="flex flex-wrap items-start gap-2">
@@ -61,7 +63,9 @@ function tomorrow(): string {
           </section>
         }
       </div>
+      </div>
     }
+    </div>
 
     <app-dialog [open]="!!draft()" heading="New tariff version" [subheading]="draft() ? draft()!.code + ' · ' + draft()!.connectionType : ''" (closed)="draft.set(null)">
       @if (draft(); as d) {

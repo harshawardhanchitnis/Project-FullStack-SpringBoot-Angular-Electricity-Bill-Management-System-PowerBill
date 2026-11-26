@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 from app.services.rag_store import RagStore
@@ -70,6 +71,23 @@ def period(value: str) -> str:
 
 def kwh(value: Any) -> str:
     return f"{float(value):,.2f} kWh".replace(".00 kWh", " kWh")
+
+
+IST = timezone(timedelta(hours=5, minutes=30), "IST")
+
+
+def moment(value: Any, missing: str = "being assessed") -> str:
+    """Formats an ISO-8601 instant as '28 Nov, 12:51 am IST'; India has no daylight saving, so the offset is fixed."""
+    if not value:
+        return missing
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return missing
+    local = (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).astimezone(IST)
+    hour = local.hour % 12 or 12
+    meridiem = "am" if local.hour < 12 else "pm"
+    return f"{local.day} {MONTHS[local.month - 1][:3]}, {hour}:{local.minute:02d} {meridiem} IST"
 
 
 def classify(message: str) -> str:
@@ -271,7 +289,7 @@ def outage(context: dict[str, Any], answer: Answer) -> None:
         return
     for item in outages:
         answer.lines.append(f"- **{item['title']}** — status: {item['status'].replace('_', ' ').lower()}; "
-                            f"estimated restoration: {item.get('estimatedRestorationAt', 'being assessed')}.")
+                            f"estimated restoration: {moment(item.get('estimatedRestorationAt'))}.")
 
 
 def complaint(context: dict[str, Any], answer: Answer) -> None:
@@ -366,7 +384,7 @@ def triage(complaint_data: dict[str, Any], context: dict[str, Any], linked: dict
             item = outages[0]
             cause = f"Known outage in the area: {item['title']} ({item['status'].replace('_', ' ').lower()})."
             evidence.append(f"Active incident: {item['title']}, restoration estimate "
-                            f"{item.get('estimatedRestorationAt')}.")
+                            f"{moment(item.get('estimatedRestorationAt'), 'not yet available')}.")
             response = (f"Your area is affected by a known outage: {item['title']}. Our crews are working on it and "
                         "we will notify you as soon as supply is restored.")
         else:

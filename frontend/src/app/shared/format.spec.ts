@@ -11,6 +11,9 @@ describe('formatting', () => {
     expect(inr(2604.18, true)).toBe('₹2,604');
     expect(kwh(412.5)).toBe('412.5 kWh');
     expect(humanize('SOLAR_OFF_PEAK')).toBe('Solar off peak');
+    expect(humanize('UPI')).toBe('UPI');
+    expect(humanize('NET_BANKING')).toBe('Net banking');
+    expect(humanize('SLA_BREACHED')).toBe('SLA breached');
     expect(period('2026-10')).toBe('October 2026');
   });
 });

@@ -28,11 +28,12 @@ import jakarta.mail.MessagingException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.MailException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.modulith.events.ApplicationModuleListener;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.util.HtmlUtils;
 import tools.jackson.databind.ObjectMapper;
 
@@ -191,14 +192,35 @@ class NotificationService {
         }
         var created = store.insert(user, "IN_APP", category, truncate(title, 160), truncate(message, 1000), link,
                 json.writeValueAsString(metadata), truncate(dedupeKey, 120));
-        created.ifPresent(notification -> stream.push(user, notification, store.unread(user)));
+        created.ifPresent(notification -> afterCommit(() -> stream.push(user, notification, store.unread(user))));
         return created.isPresent();
     }
 
+    /**
+     * Defers live pushes and emails until the notification row is committed, so a rolled-back listener never shows
+     * a notification that the inbox does not have, and a slow mail server never holds the transaction open.
+     */
+    private static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
+    }
+
     private void email(String to, String subject, String heading, List<String> lines, String path, String action) {
+        afterCommit(() -> send(to, subject, heading, lines, path, action));
+    }
+
+    private void send(String to, String subject, String heading, List<String> lines, String path, String action) {
         try {
             var message = mail.createMimeMessage();
-            var helper = new MimeMessageHelper(message, false, "UTF-8");
+            var helper = new MimeMessageHelper(message, MimeMessageHelper.MULTIPART_MODE_MIXED_RELATED, "UTF-8");
             helper.setFrom(from);
             helper.setTo(to);
             helper.setSubject(subject);
@@ -219,7 +241,8 @@ class NotificationService {
                     HtmlUtils.htmlEscape(action));
             helper.setText(text, html);
             mail.send(message);
-        } catch (MailException | MessagingException error) {
+        } catch (MessagingException | RuntimeException error) {
+            // The in-app notification is already committed; a mail failure must never undo it.
             LOG.warn("Could not deliver a notification email ({})", error.getClass().getSimpleName());
         }
     }

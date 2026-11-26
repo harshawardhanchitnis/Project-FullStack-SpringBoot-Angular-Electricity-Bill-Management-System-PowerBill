@@ -110,6 +110,24 @@ class BillingPaymentFlowTests extends IntegrationTestSupport {
         assertThat(forged.statusCode()).isEqualTo(400);
         var ledger = json(call("GET", "/consumers/me/ledger", null, customer, null));
         assertThat(ledger.get(0).path("referenceType").asText()).isEqualTo("PAYMENT");
+
+        // The receipt email and the in-app notification both survive: a mail problem must never roll back the inbox.
+        assertThat(awaitPaymentNotification(paymentId)).withFailMessage("No payment notification was stored").isTrue();
+        String billingEmail = json(call("GET", "/consumers/me", null, customer, null)).path("account")
+                .path("billingEmail").asText();
+        assertThat(mailArrived(billingEmail, "Payment received " + payment.path("paymentReference").asText()))
+                .withFailMessage("No receipt email reached Mailpit").isTrue();
+    }
+
+    private boolean awaitPaymentNotification(UUID paymentId) throws InterruptedException {
+        for (int attempt = 0; attempt < 40; attempt++) {
+            if (db.sql("SELECT count(*) FROM notifications WHERE category='PAYMENT' AND dedupe_key=?")
+                    .param("payment:" + paymentId).query(Long.class).single() == 1) {
+                return true;
+            }
+            Thread.sleep(250);
+        }
+        return false;
     }
 
     @Test

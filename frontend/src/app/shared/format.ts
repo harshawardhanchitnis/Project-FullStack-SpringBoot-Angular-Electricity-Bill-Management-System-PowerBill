@@ -42,9 +42,13 @@ export function relative(value: string): string {
   return format.format(seconds, 'second');
 }
 
+/** Words that stay upper case when an enum value is turned into a label, for example UPI and SLA. */
+const ACRONYMS = new Set(['upi', 'sla', 'fac', 'gst', 'csat', 'ev', 'kyc', 'pdf', 'csv', 'ami', 'vee', 'id']);
+
 export function humanize(value: string | null | undefined): string {
   if (!value) return '';
-  const text = value.replaceAll('_', ' ').toLowerCase();
+  const text = value.replaceAll('_', ' ').toLowerCase().split(' ')
+    .map((word) => (ACRONYMS.has(word) ? word.toUpperCase() : word)).join(' ');
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 

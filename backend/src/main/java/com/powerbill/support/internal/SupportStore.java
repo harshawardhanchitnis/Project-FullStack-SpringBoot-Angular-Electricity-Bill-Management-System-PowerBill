@@ -171,8 +171,9 @@ class SupportStore {
         db.sql("""
                 INSERT INTO outage_incidents(id,incident_code,region_zone,city,affected_pincodes,title,description,severity,
                     status,estimated_restoration_at,created_by)
-                VALUES (?,?,?,?,CAST(? AS text[]),?,?,?,'INVESTIGATING',?,?)
+                VALUES (?,?,?,?,CAST(? AS text[]),?,?,?,?,?,?)
                 """).params(id, code, zone, city, "{" + String.join(",", pincodes) + "}", title, description, severity,
+                severity.equals("PLANNED") ? "SCHEDULED" : "INVESTIGATING",
                 restoration == null ? null : Timestamp.from(restoration), actor).update();
     }
 

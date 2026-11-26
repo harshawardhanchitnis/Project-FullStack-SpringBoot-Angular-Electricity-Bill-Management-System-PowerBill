@@ -104,3 +104,33 @@ def test_triage_explains_billing_complaints_with_evidence(client):
     assert "43.2%" in body["likelyRootCause"]
     assert "412.50 kWh" in body["suggestedResponse"]
     assert body["checks"][0].startswith("SLA already breached")
+
+
+OUTAGE = {"title": "Feeder trip at Camp substation", "status": "RESTORING",
+          "estimatedRestorationAt": "2026-11-26T15:21:57.284129Z"}
+
+
+def test_outage_answers_give_restoration_times_in_ist(client):
+    response = client.post("/ml/v1/copilot/respond", json={
+        "message": "Is there a power cut in my area?", "context": {**CONTEXT, "activeOutages": [OUTAGE]}})
+    assert response.status_code == 200
+    answer = response.json()["answer"]
+    assert "26 Nov, 8:51 pm IST" in answer
+    assert "2026-11-26T" not in answer
+
+
+def test_triage_formats_the_outage_restoration_estimate(client):
+    def triage(outages):
+        response = client.post("/ml/v1/copilot/triage", json={
+            "complaint": {"ticketNumber": "TKT-2", "complaintType": "POWER_OUTAGE", "priority": "CRITICAL",
+                          "subject": "No supply", "slaBreached": False},
+            "context": {**CONTEXT, "activeOutages": outages}})
+        assert response.status_code == 200
+        return response.json()
+
+    body = triage([OUTAGE])
+    assert "Feeder trip" in body["likelyRootCause"]
+    assert any("26 Nov, 8:51 pm IST" in item for item in body["evidence"])
+    assert not any("2026-11-26T" in item for item in body["evidence"])
+    unknown = triage([{"title": "Cable fault", "status": "INVESTIGATING"}])
+    assert any("not yet available" in item for item in unknown["evidence"])

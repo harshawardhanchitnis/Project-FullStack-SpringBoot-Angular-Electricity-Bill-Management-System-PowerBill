@@ -255,7 +255,7 @@ export class CustomerDashboard {
         tooltip: { trigger: 'axis', ...tooltipStyle(c),
           formatter: (items: { dataIndex: number }[]) => {
             const hour = hours[items[0].dataIndex];
-            return `${String(hour.hour).padStart(2, '0')}:00 · ${WINDOW_LABEL[hour.window]}<br/>${kwh(hour.importKwh)}`;
+            return `${String(hour.hour).padStart(2, '0')}:00 · ${WINDOW_LABEL[hour.window]}\n${kwh(hour.importKwh)}`;
           } },
         xAxis: { type: 'category', data: hours.map((h) => `${h.hour}`), ...axisStyle(c) },
         yAxis: { type: 'value', name: 'kWh', ...axisStyle(c) },

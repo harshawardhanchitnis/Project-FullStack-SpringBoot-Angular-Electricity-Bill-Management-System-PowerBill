@@ -63,7 +63,7 @@ function completedMonths(count: number): string[] {
 
     <section class="card-pad mt-4" aria-labelledby="heatmap-heading">
       <h2 id="heatmap-heading" class="h-section">Hour-by-day load map · last 14 days</h2>
-      <p class="text-xs text-faint">Darker cells use more energy. Evening peak runs 18:00–22:00; solar hours 09:00–17:00.</p>
+      <p class="text-xs text-faint">Cells shift from teal to pink as usage rises. Evening peak runs 18:00–22:00; solar hours 09:00–17:00.</p>
       <app-chart class="mt-3" [options]="heatmapChart()" [height]="320" label="Heatmap of hourly energy use for the last 14 days" />
     </section>
 
@@ -152,7 +152,7 @@ export class Energy {
     return (c: ChartPalette) => ({
       grid: { left: 64, right: 16, top: 10, bottom: 54 },
       tooltip: { ...tooltipStyle(c), formatter: (item: { value: [number, number, number] }) =>
-        `${days[item.value[1]]} · ${String(item.value[0]).padStart(2, '0')}:00<br/>${kwh(item.value[2])}` },
+        `${days[item.value[1]]} · ${String(item.value[0]).padStart(2, '0')}:00\n${kwh(item.value[2])}` },
       xAxis: { type: 'category', data: Array.from({ length: 24 }, (_, h) => `${h}`), ...axisStyle(c), splitArea: { show: false } },
       yAxis: { type: 'category', data: days, ...axisStyle(c) },
       visualMap: { min: 0, max, calculable: false, orient: 'horizontal', left: 'center', bottom: 0, itemHeight: 120,

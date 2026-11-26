@@ -15,7 +15,7 @@ const STATUS_TONES: Record<string, keyof typeof TONES> = {
   PAID: 'ok', SUCCEEDED: 'ok', ACTIVE: 'ok', RESOLVED: 'ok', CLOSED: 'muted', COMPLETED: 'ok', VALID: 'ok',
   CONFIRMED_FAULT: 'warn', FALSE_POSITIVE: 'muted', ISSUED: 'info', OPEN: 'info', ASSIGNED: 'cyan',
   IN_PROGRESS: 'cyan', INVESTIGATING: 'cyan', PARTIALLY_PAID: 'warn', PENDING: 'warn', INITIATED: 'warn',
-  RUNNING: 'warn', PARTIAL: 'warn', RESTORING: 'cyan', CREW_DISPATCHED: 'cyan', PLANNED: 'info',
+  RUNNING: 'warn', PARTIAL: 'warn', RESTORING: 'cyan', CREW_DISPATCHED: 'cyan', PLANNED: 'info', SCHEDULED: 'info',
   SUSPENDED: 'warn', OVERDUE: 'bad', FAILED: 'bad', EXPIRED: 'muted', DISCONNECTED: 'bad', DISABLED: 'bad',
   CONFIRMED_TAMPER: 'bad', CRITICAL: 'bad', HIGH: 'warn', MEDIUM: 'info', LOW: 'muted', UNPLANNED: 'warn',
   EMERGENCY: 'bad', DISPUTED: 'warn', VOID: 'muted', FLAGGED: 'bad', ESTIMATED: 'warn',
