@@ -21,6 +21,21 @@ class MeteringTariffOperationsTests extends IntegrationTestSupport {
     private static final ZoneId INDIA = ZoneId.of("Asia/Kolkata");
 
     @Test
+    void plantsATrueZeroReadFlatlineOnTheSolarDemoMeter() {
+        // The detector reports ZERO_READ only when import and export are both zero for 24+ hours, so the planted
+        // flatline must also suppress solar export; otherwise it surfaces as a tamper suspicion instead.
+        var flatline = db.sql("""
+                SELECT count(*) AS hours, max(m.solar_capacity_kw) AS solar,
+                    extract(epoch FROM max(r.recorded_at) - min(r.recorded_at)) / 3600 AS span
+                FROM meter_readings r JOIN smart_meters m ON m.id = r.meter_id
+                WHERE m.meter_serial = 'M-DEMO-12-1' AND r.import_kwh = 0 AND r.export_kwh = 0
+                """).query().singleRow();
+        assertThat(((Number) flatline.get("solar")).doubleValue()).isPositive();
+        assertThat(((Number) flatline.get("hours")).longValue()).isEqualTo(48);
+        assertThat(((Number) flatline.get("span")).doubleValue()).isEqualTo(47.0);
+    }
+
+    @Test
     void importsCorrectsEstimatesAndInvestigatesMeterData() throws Exception {
         String email = "vee-" + UUID.randomUUID().toString().substring(0, 8) + "@example.test";
         var registered = json(call("POST", "/auth/register", registration(email, "9876501234"), null, null));

@@ -81,13 +81,16 @@ class AmiSimulator {
                             THEN greatest(0, 0.72 - abs(12.5-hour)*0.15) ELSE 0 END AS generation,
                         CASE WHEN t >= CAST(:tamperFrom AS timestamptz) AND t < CAST(:tamperTo AS timestamptz) THEN 0.03
                              WHEN t >= CAST(:zeroFrom AS timestamptz) AND t < CAST(:zeroTo AS timestamptz) THEN 0
-                             ELSE 1 END AS factor
+                             ELSE 1 END AS factor,
+                        -- A stuck meter records no export either, so a solar meter's flatline is a true zero read.
+                        CASE WHEN t >= CAST(:zeroFrom AS timestamptz) AND t < CAST(:zeroTo AS timestamptz) THEN 0
+                             ELSE 1 END AS export_factor
                     FROM hours
                 )
                 INSERT INTO meter_readings(meter_id, recorded_at, import_kwh, export_kwh, voltage,
                     power_factor, reading_source, vee_status)
                 SELECT :meter, t, round(greatest(demand - generation,0) * factor,4),
-                    round(greatest(generation - demand,0),4), 228 + mod(sequence,11),
+                    round(greatest(generation - demand,0) * export_factor,4), 228 + mod(sequence,11),
                     0.91 + mod(sequence,10) * 0.006, 'SIMULATOR', 'VALID'
                 FROM load ON CONFLICT (meter_id,recorded_at) DO NOTHING
                 """).param("meter", meter.id()).param("start", Timestamp.from(startInstant))

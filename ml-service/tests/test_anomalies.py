@@ -53,6 +53,14 @@ def test_a_zero_read_flatline_is_not_reported_again_as_tamper():
     assert [f.anomaly_type for f in findings if f.severity in ("HIGH", "CRITICAL")] == ["ZERO_READ"]
 
 
+def test_a_solar_meter_flatline_is_a_zero_read_not_tamper():
+    readings = synthetic.hourly(seed=14, kw=1.6, solar_kw=3.0)
+    assert any(r[2] > 0 for r in readings), "the solar meter should export at midday"
+    synthetic.inject_zero(readings, start_day=22)
+    findings = anomaly_detector.detect([tuple(r) for r in readings], solar=True)
+    assert [f.anomaly_type for f in findings if f.severity in ("HIGH", "CRITICAL")] == ["ZERO_READ"]
+
+
 def test_detects_a_night_baseload_jump_on_a_large_commercial_load():
     readings = synthetic.hourly(seed=13, kw=10.0)
     synthetic.inject_night_jump(readings, extra=2.5)

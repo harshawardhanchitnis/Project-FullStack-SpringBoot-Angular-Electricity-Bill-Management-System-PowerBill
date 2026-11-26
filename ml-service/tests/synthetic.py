@@ -7,7 +7,8 @@ import numpy as np
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
-def hourly(days: int = 45, kw: float = 5.0, seed: int = 3, end: datetime | None = None):
+def hourly(days: int = 45, kw: float = 5.0, seed: int = 3, end: datetime | None = None, solar_kw: float = 0.0):
+    """Hourly [start, import, export] rows; rooftop solar nets against demand and exports any surplus at midday."""
     rng = np.random.default_rng(seed)
     end = end or datetime(2026, 11, 20, tzinfo=IST)
     start = end - timedelta(days=days)
@@ -18,7 +19,8 @@ def hourly(days: int = 45, kw: float = 5.0, seed: int = 3, end: datetime | None 
         shape = 0.23 if 18 <= hour <= 22 else 0.14 if 7 <= hour <= 9 else 0.06
         weekend = 0.03 if moment.weekday() >= 5 else 0
         demand = kw * (0.08 + shape + weekend + rng.uniform(0, 0.07))
-        readings.append([moment, round(demand, 4), 0.0])
+        generation = solar_kw * max(0.0, 0.72 - abs(12.5 - hour) * 0.15) if 9 <= hour <= 16 else 0.0
+        readings.append([moment, round(max(demand - generation, 0.0), 4), round(max(generation - demand, 0.0), 4)])
     return readings
 
 
@@ -28,8 +30,10 @@ def inject_tamper(readings, start_day: int, hours: int = 72):
 
 
 def inject_zero(readings, start_day: int, hours: int = 48):
+    """A stuck meter records neither import nor export."""
     for reading in readings[start_day * 24 : start_day * 24 + hours]:
         reading[1] = 0.0
+        reading[2] = 0.0
 
 
 def inject_night_jump(readings, last_days: int = 6, extra: float = 0.9):
