@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import com.powerbill.audit.AuditAction;
 import com.powerbill.common.RequestContext;
+import com.powerbill.consumer.AccountDirectory;
 import com.powerbill.consumer.MeterDirectory;
 import com.powerbill.identity.CustomerIdentity;
 import org.springframework.context.ApplicationEventPublisher;
@@ -18,7 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
-class ConsumerService implements MeterDirectory {
+class ConsumerService implements MeterDirectory, AccountDirectory {
     private final ConsumerStore store;
     private final CustomerIdentity identity;
     private final ApplicationEventPublisher events;
@@ -120,6 +121,64 @@ class ConsumerService implements MeterDirectory {
     @Override
     public Meter customerMeter(UUID userId, UUID meterId) {
         return store.meterForUser(userId, meterId).orElseThrow(ConsumerService::missing);
+    }
+
+    @Override
+    public Meter meter(UUID meterId) {
+        return store.meter(meterId).orElseThrow(ConsumerService::missing);
+    }
+
+    @Override
+    public List<Meter> demoMeters() {
+        return store.demoMeters();
+    }
+
+    @Override
+    public java.util.Optional<AccountDirectory.Account> accountForUser(UUID userId) {
+        return store.forUser(userId).map(ConsumerService::view);
+    }
+
+    @Override
+    public java.util.Optional<AccountDirectory.Account> findAccount(UUID accountId) {
+        return store.account(accountId).map(ConsumerService::view);
+    }
+
+    @Override
+    public ServicePoint servicePoint(UUID meterId) {
+        return store.servicePoint(meterId).orElseThrow(ConsumerService::missing);
+    }
+
+    @Override
+    public List<ServicePoint> billableServicePoints() {
+        return store.billableServicePoints();
+    }
+
+    @Override
+    public List<ServicePoint> servicePoints(UUID accountId) {
+        return store.servicePoints(accountId);
+    }
+
+    @Override
+    public List<UUID> usersInPincodes(java.util.Collection<String> pincodes) {
+        return store.usersInPincodes(pincodes);
+    }
+
+    @Override
+    public List<String> pincodes(UUID accountId) {
+        return store.pincodes(accountId);
+    }
+
+    @Transactional
+    ConsumerStore.Account autoPay(ConsumerStore.Account account, boolean enabled, Actor actor, RequestContext request) {
+        store.autoPay(account.id(), enabled);
+        audit("AUTO_PAY_CHANGED", "CONSUMER", account.id(), actor, request, Map.of("enabled", enabled));
+        return account(account.id());
+    }
+
+    private static AccountDirectory.Account view(ConsumerStore.Account account) {
+        return new AccountDirectory.Account(account.id(), account.userId(), account.consumerNumber(),
+                account.fullName(), account.accountType(), account.billingEmail(), account.mobileNumber(),
+                account.status(), account.monthlyBudgetInr());
     }
 
     private void audit(String action, String entity, UUID id, Actor actor, RequestContext request,

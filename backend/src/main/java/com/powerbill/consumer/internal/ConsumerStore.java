@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.powerbill.consumer.AccountDirectory;
 import com.powerbill.consumer.MeterDirectory.Meter;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -123,6 +124,73 @@ class ConsumerStore {
     Optional<Meter> meterForUser(UUID userId, UUID meterId) {
         return db.sql(METER + " WHERE a.user_id=? AND m.id=?").params(userId, meterId)
                 .query(Meter.class).optional();
+    }
+
+    Optional<Meter> meter(UUID meterId) {
+        return db.sql(METER + " WHERE m.id=?").param(meterId).query(Meter.class).optional();
+    }
+
+    List<Meter> demoMeters() {
+        return db.sql(METER + " WHERE m.meter_serial LIKE 'M-DEMO-%' ORDER BY m.meter_serial")
+                .query(Meter.class).list();
+    }
+
+    private static final String SERVICE_POINT = """
+            SELECT m.id AS meter_id, m.meter_serial, m.connection_type, m.sanctioned_load_kw, m.solar_net_metering,
+                m.solar_capacity_kw, m.status AS meter_status, p.id AS premise_id, p.label AS premise_label,
+                p.address_line, p.city, p.state, p.pincode, p.region_zone,
+                a.id AS account_id, a.user_id, a.consumer_number, a.full_name, a.account_type, a.billing_email,
+                a.mobile_number, a.status AS account_status, a.monthly_budget_inr
+            FROM smart_meters m JOIN service_premises p ON p.id=m.premise_id
+                JOIN consumer_accounts a ON a.id=p.consumer_account_id
+            """;
+
+    Optional<AccountDirectory.ServicePoint> servicePoint(UUID meterId) {
+        return db.sql(SERVICE_POINT + " WHERE m.id=?").param(meterId).query(ConsumerStore::servicePoint).optional();
+    }
+
+    List<AccountDirectory.ServicePoint> billableServicePoints() {
+        return db.sql(SERVICE_POINT + " WHERE m.status='ACTIVE' AND a.status<>'DISCONNECTED' ORDER BY a.consumer_number,m.meter_serial")
+                .query(ConsumerStore::servicePoint).list();
+    }
+
+    List<AccountDirectory.ServicePoint> servicePoints(UUID accountId) {
+        return db.sql(SERVICE_POINT + " WHERE a.id=? ORDER BY m.installed_at,m.id").param(accountId)
+                .query(ConsumerStore::servicePoint).list();
+    }
+
+    List<UUID> usersInPincodes(java.util.Collection<String> pincodes) {
+        if (pincodes.isEmpty()) {
+            return List.of();
+        }
+        return db.sql("""
+                SELECT DISTINCT a.user_id FROM consumer_accounts a JOIN service_premises p ON p.consumer_account_id=a.id
+                WHERE p.pincode IN (:pincodes) AND a.status='ACTIVE'
+                """).param("pincodes", List.copyOf(pincodes)).query(UUID.class).list();
+    }
+
+    List<String> pincodes(UUID accountId) {
+        return db.sql("SELECT DISTINCT pincode FROM service_premises WHERE consumer_account_id=? ORDER BY pincode")
+                .param(accountId).query(String.class).list();
+    }
+
+    private static AccountDirectory.ServicePoint servicePoint(java.sql.ResultSet row, int index)
+            throws java.sql.SQLException {
+        var account = new AccountDirectory.Account(row.getObject("account_id", UUID.class),
+                row.getObject("user_id", UUID.class), row.getString("consumer_number"), row.getString("full_name"),
+                row.getString("account_type"), row.getString("billing_email"), row.getString("mobile_number"),
+                row.getString("account_status"), row.getBigDecimal("monthly_budget_inr"));
+        return new AccountDirectory.ServicePoint(row.getObject("meter_id", UUID.class), row.getString("meter_serial"),
+                row.getString("connection_type"), row.getBigDecimal("sanctioned_load_kw"),
+                row.getBoolean("solar_net_metering"), row.getBigDecimal("solar_capacity_kw"),
+                row.getString("meter_status"), row.getObject("premise_id", UUID.class), row.getString("premise_label"),
+                row.getString("address_line"), row.getString("city"), row.getString("state"), row.getString("pincode"),
+                row.getString("region_zone"), account);
+    }
+
+    boolean autoPay(UUID id, boolean enabled) {
+        return db.sql("UPDATE consumer_accounts SET auto_pay_enabled=?, version=version+1, updated_at=now() WHERE id=?")
+                .params(enabled, id).update() == 1;
     }
 
     record Account(UUID id, UUID userId, String consumerNumber, String fullName, String accountType,

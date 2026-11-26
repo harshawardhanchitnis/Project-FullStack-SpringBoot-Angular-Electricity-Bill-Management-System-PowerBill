@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Component
 @Profile("dev & !prod")
 @ConditionalOnProperty(name = "gridiq.demo.enabled", havingValue = "true")
+@org.springframework.core.annotation.Order(10)
 class DemoConsumers implements ApplicationRunner {
     private final JdbcClient db;
     private final ConsumerStore store;

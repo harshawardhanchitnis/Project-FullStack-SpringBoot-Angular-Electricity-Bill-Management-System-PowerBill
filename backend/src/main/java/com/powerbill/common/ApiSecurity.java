@@ -33,6 +33,14 @@ class ApiSecurity {
         "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password", "/api/v1/auth/verify-email"
     };
 
+    // Bearer-token APIs carry no ambient credentials, so CSRF tokens do not apply to them.
+    private static final String[] BEARER_API = {
+        "/api/v1/auth/change-password", "/api/v1/auth/me/**", "/api/v1/consumers/**", "/api/v1/ops/**",
+        "/api/v1/meters/**", "/api/v1/tariffs/**", "/api/v1/bills/**", "/api/v1/payments/**",
+        "/api/v1/webhooks/**", "/api/v1/complaints/**", "/api/v1/outages/**", "/api/v1/notifications/**",
+        "/api/v1/analytics/**", "/api/v1/ai/**"
+    };
+
     @Bean
     SecurityFilterChain apiSecurityFilterChain(
             HttpSecurity http, ObjectMapper mapper,
@@ -63,8 +71,7 @@ class ApiSecurity {
         return http
                 .cors(config -> config.configurationSource(corsSource))
                 .csrf(config -> config.ignoringRequestMatchers(PUBLIC_AUTH_POSTS)
-                        .ignoringRequestMatchers("/api/v1/auth/change-password", "/api/v1/auth/me/**",
-                                "/api/v1/consumers/**", "/api/v1/ops/**", "/api/v1/meters/**"))
+                        .ignoringRequestMatchers(BEARER_API))
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .oauth2ResourceServer(config -> config.authenticationEntryPoint(unauthorized)
                         .jwt(jwtConfig -> jwtConfig.jwtAuthenticationConverter(jwt)))
@@ -80,8 +87,17 @@ class ApiSecurity {
                     routes.requestMatchers("/api/v1/ops/consumers/**")
                             .hasAnyRole("BILLING_OFFICER", "SUPPORT_AGENT", "SUPER_ADMIN");
                     routes.requestMatchers("/api/v1/ops/audit").hasRole("SUPER_ADMIN");
+                    routes.requestMatchers(HttpMethod.POST, "/api/v1/webhooks/payments/*").permitAll();
+                    routes.requestMatchers("/api/v1/bills/**", "/api/v1/payments/**").hasRole("CUSTOMER");
+                    routes.requestMatchers(HttpMethod.GET, "/api/v1/ops/bills/**")
+                            .hasAnyRole("BILLING_OFFICER", "SUPPORT_AGENT", "SUPER_ADMIN");
+                    routes.requestMatchers("/api/v1/ops/bills/**", "/api/v1/ops/payments/**")
+                            .hasAnyRole("BILLING_OFFICER", "SUPER_ADMIN");
+                    routes.requestMatchers("/api/v1/ops/tariffs/**").hasAnyRole("BILLING_OFFICER", "SUPER_ADMIN");
+                    routes.requestMatchers("/api/v1/ops/anomalies/**", "/api/v1/ops/metering/**")
+                            .hasAnyRole("BILLING_OFFICER", "FIELD_ENGINEER", "SUPER_ADMIN");
                     routes.requestMatchers("/api/v1/auth/me", "/api/v1/auth/me/preferences",
-                            "/api/v1/auth/change-password", "/api/v1/meters/**").authenticated();
+                            "/api/v1/auth/change-password", "/api/v1/meters/**", "/api/v1/tariffs/**").authenticated();
                     routes.anyRequest().denyAll();
                 })
                 .exceptionHandling(config -> config

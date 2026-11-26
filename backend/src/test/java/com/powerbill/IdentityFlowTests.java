@@ -1,80 +1,16 @@
 package com.powerbill;
 
 import static org.assertj.core.api.Assertions.assertThat;
-
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.security.SecureRandom;
 import java.time.Duration;
-import java.util.HexFormat;
+import java.time.LocalDate;
+import java.time.YearMonth;
+import java.time.ZoneId;
+import java.math.BigDecimal;
 import java.util.Map;
-import java.util.UUID;
-import java.util.regex.Pattern;
-
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.wait.strategy.Wait;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.postgresql.PostgreSQLContainer;
-import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("dev")
-@Testcontainers
-class IdentityFlowTests {
-
-    @Container
-    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(DockerImageName
-            .parse("timescale/timescaledb:latest-pg17"
-                    + "@sha256:2f5e6969faa5cd7f4b075d65f124e30dc50d456b7b807e5c1acd9d51ba7df51c")
-            .asCompatibleSubstituteFor("postgres"));
-
-    @Container
-    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName
-            .parse("redis:7.2-alpine@sha256:2f66de68111e64c3927859f158f8e666066dae2b97d9f82770a6f37a5aa1c335"))
-            .withExposedPorts(6379);
-
-    @Container
-    static final GenericContainer<?> MAIL = new GenericContainer<>(DockerImageName
-            .parse("axllent/mailpit:v1.31.3@sha256:ed9b00c609e77e99c79b93f1178255ebc271868920f2c69a8d166bd5634ed10d"))
-            .withExposedPorts(1025, 8025).waitingFor(Wait.forHttp("/readyz").forPort(8025));
-
-    private static final String DEMO_PASSWORD = UUID.randomUUID().toString();
-    private static final String CUSTOMER_PASSWORD = UUID.randomUUID().toString();
-    private static final Pattern MAIL_TOKEN = Pattern.compile("#token=([A-Za-z0-9_-]{43})");
-
-    @DynamicPropertySource
-    static void configure(DynamicPropertyRegistry config) {
-        byte[] secret = new byte[32];
-        new SecureRandom().nextBytes(secret);
-        config.add("gridiq.auth.signing-secret", () -> HexFormat.of().formatHex(secret));
-        config.add("gridiq.demo.enabled", () -> true);
-        config.add("gridiq.demo.password", () -> DEMO_PASSWORD);
-        config.add("spring.datasource.url", () -> POSTGRES.getJdbcUrl() + "&currentSchema=gridiq,public");
-        config.add("spring.datasource.username", POSTGRES::getUsername);
-        config.add("spring.datasource.password", POSTGRES::getPassword);
-        config.add("spring.data.redis.host", REDIS::getHost);
-        config.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
-        config.add("spring.mail.host", MAIL::getHost);
-        config.add("spring.mail.port", () -> MAIL.getMappedPort(1025));
-    }
-
-    @LocalServerPort int port;
-    @Autowired ObjectMapper json;
-    @Autowired JdbcClient db;
-    private final HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+class IdentityFlowTests extends IntegrationTestSupport {
 
     @Test
     void registersOwnsAndUpdatesOnlyTheAuthenticatedCustomerAccount() throws Exception {
@@ -168,6 +104,60 @@ class IdentityFlowTests {
     }
 
     @Test
+    void ingestsHourlyDataAndPricesAFullMeterHistory() throws Exception {
+        String email = "metering@example.test";
+        var registration = call("POST", "/auth/register", registration(email, "9876543210"), null, null);
+        assertThat(registration.statusCode()).withFailMessage(registration.body()).isEqualTo(201);
+        String testMeter = json(registration).path("meters").get(0).path("id").asText();
+        String customer = token(login(email, CUSTOMER_PASSWORD));
+        String billing = token(login("billing@demo.powerbill.invalid", DEMO_PASSWORD));
+        String other = token(login("customer05@demo.powerbill.invalid", DEMO_PASSWORD));
+        var start = LocalDate.of(2025, 5, 1).atStartOfDay(ZoneId.of("Asia/Kolkata")).toInstant();
+        var end = start.plus(Duration.ofDays(1));
+        var readings = java.util.List.of(
+                Map.of("start", start.toString(), "importKwh", 1.25, "exportKwh", 0),
+                Map.of("start", start.plusSeconds(3600).toString(), "importKwh", 2.75, "exportKwh", 0),
+                Map.of("start", end.minusSeconds(3600).toString(), "importKwh", 15, "exportKwh", 0),
+                Map.of("start", end.toString(), "importKwh", 2, "exportKwh", 0));
+        String path = "/meters/" + testMeter;
+        assertThat(call("POST", path + "/readings", readings, customer, null).statusCode()).isEqualTo(403);
+        var ingest = call("POST", path + "/readings", readings, billing, null);
+        assertThat(ingest.statusCode()).withFailMessage(ingest.body()).isEqualTo(200);
+        assertThat(json(ingest).path("inserted").asInt()).isEqualTo(4);
+        assertThat(json(ingest).path("flagged").asInt()).isEqualTo(1);
+        assertThat(json(call("POST", path + "/readings", readings, billing, null)).path("duplicates").asInt())
+                .isEqualTo(4);
+
+        String range = "?from=" + start + "&to=" + end;
+        var daily = call("GET", path + "/readings" + range + "&granularity=daily", null, customer, null);
+        assertThat(daily.statusCode()).withFailMessage(daily.body()).isEqualTo(200);
+        JsonNode totals = json(daily).get(0);
+        assertThat(totals.path("importKwh").decimalValue()).isEqualByComparingTo("4");
+        assertThat(totals.path("flaggedIntervals").asInt()).isEqualTo(1);
+        var xml = call("GET", path + "/export/green-button" + range, null, customer, null);
+        assertThat(xml.statusCode()).isEqualTo(200);
+        assertThat(xml.body()).contains("http://naesb.org/espi", "<espi:value>12500</espi:value>")
+                .doesNotContain(testMeter, "<espi:value>150000</espi:value>");
+        assertThat(call("GET", path + "/export/csv" + range, null, other, null).statusCode()).isEqualTo(404);
+        var csv = call("GET", path + "/export/csv" + range, null, customer, null);
+        assertThat(csv.body().lines().count()).isEqualTo(3);
+        assertThat(call("GET", "/ops/anomalies?status=OPEN", null, billing, null).body()).contains("SPIKE");
+
+        var meters = json(call("GET", "/consumers/me/meters", null, other, null));
+        var demo = meters.get(0).path("id").asText();
+        var month = YearMonth.now(ZoneId.of("Asia/Kolkata")).minusMonths(1).toString();
+        var input = Map.of("meterId", demo, "month", month, "loadShiftPct", 30, "rooftopSolarKw", 1.5,
+                "installedCostInr", 50000);
+        var simulated = call("POST", "/tariffs/simulate", input, other, null);
+        assertThat(simulated.statusCode()).withFailMessage(simulated.body()).isEqualTo(200);
+        var quote = json(simulated);
+        assertThat(quote.path("projected").path("totalInr").decimalValue())
+                .isLessThan(quote.path("baseline").path("totalInr").decimalValue());
+        assertThat(quote.path("annualizedSavingsInr").decimalValue()).isGreaterThan(BigDecimal.ZERO);
+        assertThat(call("POST", "/tariffs/simulate", input, customer, null).statusCode()).isEqualTo(404);
+    }
+
+    @Test
     void limitsRepeatedLoginAttemptsAndKeepsTheResetResponseGeneric() throws Exception {
         String email = "customer03@demo.powerbill.invalid";
         for (int i = 0; i < 5; i++) {
@@ -190,69 +180,5 @@ class IdentityFlowTests {
         assertThat(call("POST", "/auth/reset-password", reset, null, null).statusCode()).isEqualTo(400);
         assertThat(call("GET", "/auth/me", null, token(old), null).statusCode()).isEqualTo(401);
         assertThat(login(resetEmail, CUSTOMER_PASSWORD).statusCode()).isEqualTo(200);
-    }
-
-    private HttpResponse<String> login(String email, String password) throws Exception {
-        var response = call("POST", "/auth/login", Map.of("email", email, "password", password), null, null);
-        assertThat(response.statusCode()).withFailMessage(response.body()).isEqualTo(200);
-        return response;
-    }
-
-    private Map<String, Object> registration(String email, String phone) {
-        return Map.of("email", email, "password", CUSTOMER_PASSWORD, "fullName", "Ananya Kulkarni",
-                "mobileNumber", phone, "premise", Map.of("label", "Home", "addressLine", "1 Sample Road",
-                        "city", "Pune", "state", "Maharashtra", "pincode", "411001", "regionZone", "Pune"));
-    }
-
-    private HttpResponse<String> call(String method, String path, Object body, String bearer, String cookie)
-            throws Exception {
-        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1" + path))
-                .timeout(Duration.ofSeconds(10)).header("X-Request-Id", "phase2-integration");
-        if (bearer != null) {
-            request.header("Authorization", "Bearer " + bearer);
-        }
-        if (cookie != null) {
-            request.header("Cookie", cookie).header("X-GridIQ-Session", "1");
-        }
-        if (body != null) {
-            request.header("Content-Type", "application/json")
-                    .method(method, HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
-        } else {
-            request.method(method, HttpRequest.BodyPublishers.noBody());
-        }
-        return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
-    }
-
-    private JsonNode json(HttpResponse<String> response) {
-        return json.readTree(response.body());
-    }
-
-    private String token(HttpResponse<String> response) {
-        return json(response).path("accessToken").asText();
-    }
-
-    private static String cookie(HttpResponse<String> response) {
-        return response.headers().firstValue("Set-Cookie").orElseThrow().split(";", 2)[0];
-    }
-
-    private String mailToken(String email, String subject) throws Exception {
-        String base = "http://" + MAIL.getHost() + ":" + MAIL.getMappedPort(8025);
-        for (int attempt = 0; attempt < 25; attempt++) {
-            var response = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/messages")).build(),
-                    HttpResponse.BodyHandlers.ofString());
-            for (JsonNode message : json(response).path("messages")) {
-                if (message.path("Subject").asText().equals(subject)
-                        && message.path("To").get(0).path("Address").asText().equals(email)) {
-                    String path = "/api/v1/message/" + message.path("ID").asText();
-                    var detail = client.send(HttpRequest.newBuilder(URI.create(base + path)).build(),
-                            HttpResponse.BodyHandlers.ofString());
-                    var token = MAIL_TOKEN.matcher(json(detail).path("Text").asText());
-                    assertThat(token.find()).isTrue();
-                    return token.group(1);
-                }
-            }
-            Thread.sleep(200);
-        }
-        throw new AssertionError("The expected email never reached Mailpit");
     }
 }

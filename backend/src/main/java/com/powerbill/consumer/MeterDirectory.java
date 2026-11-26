@@ -3,9 +3,12 @@ package com.powerbill.consumer;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
+import java.util.List;
 
 public interface MeterDirectory {
     Meter customerMeter(UUID userId, UUID meterId);
+    Meter meter(UUID meterId);
+    List<Meter> demoMeters();
 
     record Meter(UUID id, UUID premiseId, String meterSerial, String connectionType,
             BigDecimal sanctionedLoadKw, boolean solarNetMetering, BigDecimal solarCapacityKw,

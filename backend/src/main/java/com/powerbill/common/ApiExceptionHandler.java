@@ -61,6 +61,11 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return problem(request, HttpStatus.UNAUTHORIZED, "Authentication is required for this resource.");
     }
 
+    @ExceptionHandler(org.springframework.dao.DuplicateKeyException.class)
+    ProblemDetail handleDuplicate(HttpServletRequest request) {
+        return problem(request, HttpStatus.CONFLICT, "The resource changed concurrently. Reload it and try again.");
+    }
+
     @ExceptionHandler(Exception.class)
     ProblemDetail handleUnexpectedException(Exception error, HttpServletRequest request) {
         LOG.error("Unhandled request error ({})", error.getClass().getName());
