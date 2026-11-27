@@ -97,12 +97,15 @@ class StaffService implements StaffDirectory, com.powerbill.identity.UserDirecto
     private final IdentityStore store;
     private final PasswordEncoder passwords;
     private final ApplicationEventPublisher events;
+    private final AuthStateCache states;
 
-    StaffService(JdbcClient db, IdentityStore store, PasswordEncoder passwords, ApplicationEventPublisher events) {
+    StaffService(JdbcClient db, IdentityStore store, PasswordEncoder passwords, ApplicationEventPublisher events,
+            AuthStateCache states) {
         this.db = db;
         this.store = store;
         this.passwords = passwords;
         this.events = events;
+        this.states = states;
     }
 
     @Override
@@ -179,6 +182,7 @@ class StaffService implements StaffDirectory, com.powerbill.identity.UserDirecto
                 UPDATE users SET role=?, status=?, session_version=session_version+1, updated_at=now() WHERE id=?
                 """).params(role, status, id).update();
         db.sql("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=? AND revoked_at IS NULL").param(id).update();
+        states.evictUser(id); // the new role or status applies to the very next request
         events.publishEvent(AuditAction.record("USER_ACCESS_CHANGED", "USER", id, actor, "SUPER_ADMIN", request,
                 Map.of("fromRole", user.role(), "toRole", role, "fromStatus", user.status(), "toStatus", status)));
         return row(id);

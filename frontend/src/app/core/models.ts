@@ -156,8 +156,7 @@ export interface Payment {
   status: string;
   amount: number;
   currency: string;
-  method?: string;
-  paymentMethod?: string;
+  paymentMethod: string;
   gatewayProvider: string;
   gatewayOrderId: string;
   gatewayPaymentId: string | null;
@@ -267,6 +266,20 @@ export interface ConsumerOverview {
   todShareKwh: Record<string, number>;
   monthlyBudgetInr: number | null;
   openAnomalies: number;
+  /** Anonymous comparison with similar meters; null when the group is too small to stay anonymous. */
+  peers: PeerBenchmark | null;
+}
+
+export interface PeerBenchmark {
+  group: string;
+  peers: number;
+  yourKwh: number;
+  medianKwh: number;
+  p25Kwh: number;
+  p75Kwh: number;
+  differencePct: number;
+  /** Share of peers that used more energy than this meter. */
+  moreEfficientThanPct: number;
 }
 
 export interface Notification {

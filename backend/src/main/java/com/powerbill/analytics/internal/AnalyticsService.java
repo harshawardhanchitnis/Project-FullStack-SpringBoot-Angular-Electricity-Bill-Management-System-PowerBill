@@ -10,6 +10,7 @@ import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
@@ -23,6 +24,7 @@ import com.powerbill.metering.AnomalyRegistry;
 import com.powerbill.metering.MeterUsage;
 import com.powerbill.payment.PaymentEvents;
 import com.powerbill.support.SupportDirectory;
+import com.powerbill.support.SupportEvents;
 import com.powerbill.tariff.TariffPlan;
 import com.powerbill.tariff.TariffPricing;
 import org.springframework.modulith.events.ApplicationModuleListener;
@@ -31,6 +33,9 @@ import org.springframework.stereotype.Service;
 @Service
 class AnalyticsService {
     private static final String EXECUTIVE = "executive";
+    private static final String AREA_GENERATION = "consumer:area";
+    private static final java.time.ZoneId INDIA = java.time.ZoneId.of("Asia/Kolkata");
+    static final int MIN_PEERS = 4;
     private final AccountDirectory accounts;
     private final MeterUsage usage;
     private final BillingLedger billing;
@@ -53,8 +58,14 @@ class AnalyticsService {
     }
 
     ConsumerOverview overview(AccountDirectory.Account account, ServicePoint point, LocalDate today) {
-        return cache.get("consumer:" + point.meterId() + ":" + today, Duration.ofSeconds(60), ConsumerOverview.class,
-                () -> computeOverview(account, point, today));
+        // The key embeds the account's and the area-wide generations, so an event invalidates it immediately.
+        String key = "consumer:" + point.meterId() + ":" + today + ":" + cache.generation(accountGeneration(account.id()))
+                + ":" + cache.generation(AREA_GENERATION);
+        return cache.get(key, Duration.ofSeconds(60), ConsumerOverview.class, () -> computeOverview(account, point, today));
+    }
+
+    private static String accountGeneration(UUID accountId) {
+        return "consumer:" + accountId;
     }
 
     private ConsumerOverview computeOverview(AccountDirectory.Account account, ServicePoint point, LocalDate today) {
@@ -83,8 +94,10 @@ class AnalyticsService {
                 : cycleKwh.subtract(previousSameDays).multiply(BigDecimal.valueOf(100))
                         .divide(previousSameDays, 1, RoundingMode.HALF_UP);
 
-        TariffPlan plan = pricing.applicablePlan(point.connectionType(), cycleStart);
-        Slab slab = slab(plan, cycleKwh);
+        TariffPlan plan = pricing.applicablePlan(point.tariffPlanId(), point.connectionType(), cycleStart);
+        // Slabs apply to net billable energy: net-metered meters offset imports with exports and carried credit.
+        Slab slab = slab(plan, netBillable(point, cycleKwh, cycleExport,
+                point.solarNetMetering() ? billing.openingCredit(point.meterId(), cycle) : ZERO));
         var shape = usage.hourlyProfile(point.meterId(), today.minusDays(30), today);
         var hours = new ArrayList<HourPoint>();
         var windows = new LinkedHashMap<String, BigDecimal>();
@@ -104,7 +117,55 @@ class AnalyticsService {
                 scale(cycleExport), scale(previousSameDays), change), slab, billing.receivables(account.id()),
                 support.openComplaints(account.id()), outages, months, last30, hours, windows,
                 account.monthlyBudgetInr(), anomalies.forMeter(point.meterId(), 3).stream()
-                        .filter(item -> item.status().equals("OPEN") || item.status().equals("INVESTIGATING")).count());
+                        .filter(item -> item.status().equals("OPEN") || item.status().equals("INVESTIGATING")).count(),
+                peer(point, today));
+    }
+
+    /**
+     * Compares the meter's last 30 days with meters of the same connection type and load band. Only aggregates
+     * leave this method, and nothing is returned when fewer than {@value #MIN_PEERS} other meters are in the group.
+     */
+    PeerBenchmark peer(ServicePoint point, LocalDate today) {
+        var totals = usage.totalsByMeter(today.minusDays(30), today);
+        var own = totals.get(point.meterId());
+        if (own == null || own.importKwh().signum() == 0) {
+            return null;
+        }
+        String band = loadBand(point.sanctionedLoadKw());
+        var peers = accounts.billableServicePoints().stream()
+                .filter(other -> !other.meterId().equals(point.meterId())
+                        && other.connectionType().equals(point.connectionType())
+                        && loadBand(other.sanctionedLoadKw()).equals(band))
+                .map(other -> totals.get(other.meterId()))
+                .filter(item -> item != null && item.importKwh().signum() > 0)
+                .map(MeterUsage.Totals::importKwh).sorted().toList();
+        if (peers.size() < MIN_PEERS) {
+            return null;
+        }
+        BigDecimal median = percentile(peers, 50);
+        long heavier = peers.stream().filter(kwh -> kwh.compareTo(own.importKwh()) > 0).count();
+        BigDecimal difference = own.importKwh().subtract(median).multiply(BigDecimal.valueOf(100))
+                .divide(median, 1, RoundingMode.HALF_UP);
+        String type = point.connectionType().charAt(0) + point.connectionType().substring(1).toLowerCase(Locale.ROOT);
+        return new PeerBenchmark(type + " · " + band, peers.size(), scale(own.importKwh()), scale(median),
+                scale(percentile(peers, 25)), scale(percentile(peers, 75)), difference,
+                (int) Math.round(heavier * 100.0 / peers.size()));
+    }
+
+    static String loadBand(BigDecimal kw) {
+        if (kw.compareTo(BigDecimal.valueOf(5)) <= 0) {
+            return "up to 5 kW";
+        }
+        return kw.compareTo(BigDecimal.TEN) <= 0 ? "5–10 kW" : "over 10 kW";
+    }
+
+    /** Linear-interpolated percentile of a sorted list. */
+    static BigDecimal percentile(List<BigDecimal> sorted, int pct) {
+        double rank = (sorted.size() - 1) * pct / 100.0;
+        int low = (int) Math.floor(rank);
+        int high = (int) Math.ceil(rank);
+        BigDecimal fraction = BigDecimal.valueOf(rank - low);
+        return sorted.get(low).add(sorted.get(high).subtract(sorted.get(low)).multiply(fraction));
     }
 
     Executive executive() {
@@ -121,18 +182,93 @@ class AnalyticsService {
             return new Executive(revenue, scale(billed), scale(collected), billed.signum() == 0 ? null
                     : collected.multiply(BigDecimal.valueOf(100)).divide(billed, 1, RoundingMode.HALF_UP),
                     scale(outstanding), aging, statistics.slabDistribution(3), anomalies.statistics(),
-                    support.slaStatistics(), (int) consumers, points.size());
+                    support.slaStatistics(), (int) consumers, points.size(), regions(points, LocalDate.now(INDIA)));
         });
+    }
+
+    /**
+     * Per region and city over the last three complete months: net metered energy against billed energy (a proxy
+     * for commercial and data-quality losses), collection efficiency, overdue principal and open anomalies.
+     */
+    List<Region> regions(List<ServicePoint> points, LocalDate today) {
+        YearMonth last = YearMonth.from(today).minusMonths(1);
+        YearMonth first = last.minusMonths(2);
+        var energy = usage.totalsByMeter(first.atDay(1), last.plusMonths(1).atDay(1));
+        var bills = new java.util.HashMap<UUID, BillingStatistics.MeterBilling>();
+        statistics.billingByMeter(first, last).forEach(item -> bills.put(item.meterId(), item));
+        var open = anomalies.openByMeter();
+        var groups = new TreeMap<String, List<ServicePoint>>();
+        points.forEach(point -> groups.computeIfAbsent(point.regionZone() + "|" + point.city(),
+                key -> new ArrayList<>()).add(point));
+        var regions = new ArrayList<Region>();
+        groups.forEach((key, members) -> {
+            BigDecimal metered = ZERO;
+            BigDecimal billedKwh = ZERO;
+            BigDecimal billedInr = ZERO;
+            BigDecimal collectedInr = ZERO;
+            BigDecimal overdue = ZERO;
+            int openAnomalies = 0;
+            for (ServicePoint point : members) {
+                var totals = energy.get(point.meterId());
+                if (totals != null) {
+                    metered = metered.add(totals.importKwh().subtract(totals.exportKwh()).max(ZERO));
+                }
+                var billing = bills.get(point.meterId());
+                if (billing != null) {
+                    billedKwh = billedKwh.add(billing.billedKwh());
+                    billedInr = billedInr.add(billing.billedInr());
+                    collectedInr = collectedInr.add(billing.collectedInr());
+                    overdue = overdue.add(billing.overdueInr());
+                }
+                openAnomalies += open.getOrDefault(point.meterId(), 0);
+            }
+            BigDecimal loss = metered.signum() == 0 ? null : metered.subtract(billedKwh).max(ZERO)
+                    .multiply(BigDecimal.valueOf(100)).divide(metered, 1, RoundingMode.HALF_UP);
+            BigDecimal efficiency = billedInr.signum() == 0 ? null : collectedInr.multiply(BigDecimal.valueOf(100))
+                    .divide(billedInr, 1, RoundingMode.HALF_UP);
+            regions.add(new Region(members.getFirst().regionZone(), members.getFirst().city(), members.size(),
+                    scale(metered), scale(billedKwh), loss, scale(billedInr), scale(collectedInr), efficiency,
+                    scale(overdue), openAnomalies));
+        });
+        return regions;
     }
 
     @ApplicationModuleListener
     void on(BillingEvents.BillIssued event) {
         cache.evict(EXECUTIVE);
+        cache.bump(accountGeneration(event.accountId()));
+    }
+
+    @ApplicationModuleListener
+    void on(BillingEvents.BillAdjusted event) {
+        cache.evict(EXECUTIVE);
+        cache.bump(accountGeneration(event.accountId()));
+    }
+
+    @ApplicationModuleListener
+    void on(BillingEvents.BillOverdue event) {
+        cache.evict(EXECUTIVE);
+        cache.bump(accountGeneration(event.accountId()));
     }
 
     @ApplicationModuleListener
     void on(PaymentEvents.PaymentSucceeded event) {
         cache.evict(EXECUTIVE);
+        cache.bump(accountGeneration(event.accountId()));
+    }
+
+    @ApplicationModuleListener
+    void on(SupportEvents.ComplaintUpdated event) {
+        cache.evict(EXECUTIVE);
+        if (event.accountId() != null) {
+            cache.bump(accountGeneration(event.accountId()));
+        }
+    }
+
+    /** Outages cover whole pincodes, so they invalidate every consumer overview at once. */
+    @ApplicationModuleListener
+    void on(SupportEvents.OutageChanged event) {
+        cache.bump(AREA_GENERATION);
     }
 
     static Slab slab(TariffPlan plan, BigDecimal kwh) {
@@ -147,6 +283,11 @@ class AnalyticsService {
             }
         }
         throw new IllegalStateException("Tariff has no open slab");
+    }
+
+    /** Energy the tariff charges for: imports minus exports and opening credit, never below zero, when net-metered. */
+    static BigDecimal netBillable(ServicePoint point, BigDecimal importKwh, BigDecimal exportKwh, BigDecimal openingCredit) {
+        return point.solarNetMetering() ? importKwh.subtract(exportKwh).subtract(openingCredit).max(ZERO) : importKwh;
     }
 
     private static BigDecimal sum(List<MeterUsage.DailyUsage> days, LocalDate from, LocalDate to, boolean export) {
@@ -171,9 +312,16 @@ class AnalyticsService {
     record ConsumerOverview(MeterView meter, CycleView cycle, Slab slab, BillingLedger.Receivables receivables,
             int openComplaints, List<SupportDirectory.Outage> outages, List<MonthPoint> monthly, List<DayPoint> daily,
             List<HourPoint> hourlyProfile, Map<String, BigDecimal> todShareKwh, BigDecimal monthlyBudgetInr,
-            long openAnomalies) {}
+            long openAnomalies, PeerBenchmark peers) {}
+    /** Anonymous comparison with similar meters; {@code moreEfficientThanPct} is the share of peers using more. */
+    record PeerBenchmark(String group, int peers, BigDecimal yourKwh, BigDecimal medianKwh, BigDecimal p25Kwh,
+            BigDecimal p75Kwh, BigDecimal differencePct, int moreEfficientThanPct) {}
+    record Region(String regionZone, String city, int meters, BigDecimal meteredKwh, BigDecimal billedKwh,
+            BigDecimal lossProxyPct, BigDecimal billedInr, BigDecimal collectedInr, BigDecimal collectionEfficiencyPct,
+            BigDecimal overdueInr, int openAnomalies) {}
     record Executive(List<BillingStatistics.MonthlyRevenue> revenue, BigDecimal billedLast12Inr,
             BigDecimal collectedLast12Inr, BigDecimal collectionEfficiencyPct, BigDecimal outstandingInr,
             List<BillingStatistics.AgingBucket> aging, List<BillingStatistics.SlabBand> slabDistribution,
-            AnomalyRegistry.Statistics anomalies, SupportDirectory.SlaStatistics sla, int consumers, int meters) {}
+            AnomalyRegistry.Statistics anomalies, SupportDirectory.SlaStatistics sla, int consumers, int meters,
+            List<Region> regions) {}
 }

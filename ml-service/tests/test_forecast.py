@@ -53,3 +53,19 @@ def test_the_forecast_rejects_invalid_horizons(client):
         "meterId": "m-1", "asOf": "2026-11-20", "cycleEnd": "2026-11-10",
         "history": [{"day": f"2026-11-{d:02d}", "importKwh": 10} for d in range(1, 15)]})
     assert response.status_code == 422
+
+
+def _request(as_of: date, days_before: int, days_after: int = 7):
+    days = [as_of - timedelta(days=d) for d in range(days_before, 0, -1)]
+    days += [as_of + timedelta(days=d) for d in range(days_after)]
+    return {"meterId": "m-1", "asOf": as_of.isoformat(), "cycleEnd": (as_of + timedelta(days=10)).isoformat(),
+            "history": [{"day": d.isoformat(), "importKwh": 12.5} for d in days]}
+
+
+def test_the_forecast_needs_a_week_of_history_before_as_of(client):
+    as_of = date(2026, 11, 20)
+    for days_before in (0, 6):
+        response = client.post("/ml/v1/forecast", json=_request(as_of, days_before))
+        assert response.status_code == 422
+        assert "7 days of history before asOf" in response.json()["detail"]
+    assert client.post("/ml/v1/forecast", json=_request(as_of, 7)).status_code == 200

@@ -1,17 +1,19 @@
 import { HttpClient } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { LucideBadgeCheck, LucideGauge, LucideSunMedium } from '@lucide/angular';
+import { LucideBadgeCheck, LucideGauge, LucidePlus, LucideSunMedium } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { AuthStore } from '../../core/auth';
 import { CustomerStore } from '../../core/customer';
 import { Account, Profile, Theme } from '../../core/models';
 import { ThemeStore, Toasts, problemMessage } from '../../core/ui-state';
 import { FORMAT_PIPES } from '../../shared/format';
-import { StatusBadge } from '../../shared/ui';
+import { Dialog, ErrorBanner, StatusBadge } from '../../shared/ui';
+import { STATES } from '../auth/register';
 
 @Component({
-  imports: [FormsModule, StatusBadge, ...FORMAT_PIPES, LucideBadgeCheck, LucideGauge, LucideSunMedium],
+  imports: [FormsModule, Dialog, ErrorBanner, StatusBadge, ...FORMAT_PIPES, LucideBadgeCheck, LucideGauge, LucidePlus,
+    LucideSunMedium],
   template: `
     <h1 class="h-page">Account & meters</h1>
     @if (customer.details(); as details) {
@@ -55,6 +57,13 @@ import { StatusBadge } from '../../shared/ui';
               <input type="checkbox" class="size-4 accent-[var(--brand)]" [checked]="auth.user()?.budgetAlerts" (change)="toggleAlerts($event)" />
               Bill-shock and budget alerts
             </label>
+            <label class="flex items-start gap-3">
+              <input type="checkbox" class="mt-0.5 size-4 accent-[var(--brand)]" [checked]="details.account.autoPayEnabled"
+                     [disabled]="busy()" (change)="toggleAutoPay(details.account, $event)" aria-describedby="auto-pay-hint" />
+              <span>Auto-pay new bills
+                <span id="auto-pay-hint" class="hint block">New bills are paid in full when they are issued, and bills already open are paid at the daily 06:30 IST run, through the signed payment gateway. You get a receipt by email.</span>
+              </span>
+            </label>
           </div>
           <form class="mt-5 space-y-3 border-t border-line pt-4" (ngSubmit)="changePassword()">
             <p class="font-medium">Change password</p>
@@ -68,7 +77,12 @@ import { StatusBadge } from '../../shared/ui';
         </section>
       </div>
 
-      <h2 class="h-section mt-8">Premises & meters</h2>
+      <div class="mt-8 flex flex-wrap items-center justify-between gap-2">
+        <h2 class="h-section">Premises & meters</h2>
+        <button type="button" class="btn-secondary btn-sm" (click)="premiseOpen.set(true)">
+          <svg lucidePlus [size]="14" aria-hidden="true"></svg> Add premise
+        </button>
+      </div>
       <div class="mt-3 grid gap-4 md:grid-cols-2">
         @for (premise of details.premises; track premise.id) {
           <section class="card-pad">
@@ -88,9 +102,35 @@ import { StatusBadge } from '../../shared/ui';
           </section>
         }
       </div>
+    } @else if (loadError()) {
+      <div class="mt-6"><app-error [message]="loadError()!" (retry)="load()" /></div>
     } @else {
       <div class="mt-6 grid gap-4 lg:grid-cols-3"><div class="skeleton h-64"></div><div class="skeleton h-64"></div><div class="skeleton h-64"></div></div>
     }
+
+    <app-dialog [open]="premiseOpen()" heading="Add a premise" subheading="A new service address. Staff add its meter after the connection is approved."
+                (closed)="premiseOpen.set(false)">
+      <form id="premise-form" class="grid gap-3 sm:grid-cols-2" (ngSubmit)="addPremise()" #premiseForm="ngForm">
+        <div class="sm:col-span-2"><label class="label" for="p-label">Name</label>
+          <input id="p-label" class="input" name="label" [(ngModel)]="premise.label" required maxlength="100" placeholder="Shop, farm, second home" /></div>
+        <div class="sm:col-span-2"><label class="label" for="p-address">Address</label>
+          <input id="p-address" class="input" name="addressLine" [(ngModel)]="premise.addressLine" required maxlength="255" autocomplete="street-address" /></div>
+        <div><label class="label" for="p-city">City</label>
+          <input id="p-city" class="input" name="city" [(ngModel)]="premise.city" required maxlength="100" autocomplete="address-level2" /></div>
+        <div><label class="label" for="p-state">State</label>
+          <select id="p-state" class="input" name="state" [(ngModel)]="premise.state" required>
+            @for (state of states; track state) { <option [value]="state">{{ state }}</option> }
+          </select></div>
+        <div><label class="label" for="p-pincode">Pincode</label>
+          <input id="p-pincode" class="input num" name="pincode" inputmode="numeric" [(ngModel)]="premise.pincode" required pattern="[1-9][0-9]{5}" autocomplete="postal-code" />
+          <p class="hint">6 digits</p></div>
+        @if (premiseError()) { <p role="alert" class="sm:col-span-2 rounded-lg bg-bad-soft px-3 py-2 text-sm">{{ premiseError() }}</p> }
+      </form>
+      <div dialog-footer class="empty:hidden flex justify-end gap-2 border-t border-line p-4">
+        <button type="button" class="btn-secondary" (click)="premiseOpen.set(false)">Cancel</button>
+        <button type="submit" form="premise-form" class="btn-primary" [disabled]="busy() || !premiseForm.valid">Add premise</button>
+      </div>
+    </app-dialog>
   `,
 })
 export class AccountPage {
@@ -103,11 +143,25 @@ export class AccountPage {
   protected contact = { billingEmail: '', mobileNumber: '', monthlyBudgetInr: null as number | null };
   protected password = { current: '', next: '' };
 
+  protected readonly loadError = signal<string | null>(null);
+  protected readonly premiseOpen = signal(false);
+  protected readonly premiseError = signal<string | null>(null);
+  protected readonly states = STATES;
+  protected premise = this.blankPremise();
+
   constructor() {
-    void this.customer.load(true).then((details) => {
+    void this.load();
+  }
+
+  protected async load(): Promise<void> {
+    this.loadError.set(null);
+    try {
+      const details = await this.customer.load(true);
       this.contact = { billingEmail: details.account.billingEmail, mobileNumber: details.account.mobileNumber,
         monthlyBudgetInr: details.account.monthlyBudgetInr };
-    });
+    } catch (error) {
+      this.loadError.set(problemMessage(error, 'Your account could not be loaded.'));
+    }
   }
 
   protected metersAt(premiseId: string) {
@@ -126,6 +180,42 @@ export class AccountPage {
     } finally {
       this.busy.set(false);
     }
+  }
+
+  protected async toggleAutoPay(account: Account, event: Event): Promise<void> {
+    const enabled = (event.target as HTMLInputElement).checked;
+    this.busy.set(true);
+    try {
+      await firstValueFrom(this.http.patch<Account>('/api/v1/consumers/me/auto-pay', { enabled, version: account.version }));
+      this.toasts.success(enabled ? 'Auto-pay is on. New bills are paid when issued.' : 'Auto-pay is off.');
+    } catch (error) {
+      this.toasts.error(error);
+    } finally {
+      // Reload either way so the switch and the account version match the server.
+      await this.customer.load(true).catch(() => undefined);
+      this.busy.set(false);
+    }
+  }
+
+  protected async addPremise(): Promise<void> {
+    this.busy.set(true);
+    this.premiseError.set(null);
+    try {
+      await firstValueFrom(this.http.post('/api/v1/consumers/me/premises',
+        { ...this.premise, regionZone: this.premise.city, latitude: null, longitude: null }));
+      this.premiseOpen.set(false);
+      this.premise = this.blankPremise();
+      await this.customer.load(true);
+      this.toasts.success('Premise added.');
+    } catch (error) {
+      this.premiseError.set(problemMessage(error, 'The premise could not be added.'));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  private blankPremise() {
+    return { label: '', addressLine: '', city: '', state: 'Maharashtra', pincode: '' };
   }
 
   protected setTheme(theme: Theme): void {

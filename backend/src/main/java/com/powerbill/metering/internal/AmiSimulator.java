@@ -70,7 +70,7 @@ class AmiSimulator {
                         CAST(:finish AS timestamptz)-interval '1 hour', interval '1 hour') AS t
                 ), load AS (
                     SELECT t, hour, sequence,
-                        CAST(:kw AS numeric) * 0.4 * (0.08 + (CASE WHEN hour BETWEEN 18 AND 22 THEN 0.23
+                        CAST(:kw AS numeric) * CAST(:intensity AS numeric) * 0.4 * (0.08 + (CASE WHEN hour BETWEEN 18 AND 22 THEN 0.23
                             WHEN hour BETWEEN 7 AND 9 THEN 0.14 ELSE 0.06 END)
                             + CASE WHEN month BETWEEN 3 AND 6 THEN 0.10 ELSE 0 END
                             + CASE WHEN day >= 6 THEN 0.03 ELSE 0 END
@@ -97,6 +97,8 @@ class AmiSimulator {
                 .param("finish", Timestamp.from(endInstant)).param("kw", meter.sanctionedLoadKw())
                 .param("solar", meter.solarCapacityKw() == null ? java.math.BigDecimal.ZERO : meter.solarCapacityKw())
                 .param("salt", Math.floorMod(meter.meterSerial().hashCode(), 100))
+                // Households of the same size differ: a stable 0.75x to 1.25x usage intensity per meter.
+                .param("intensity", java.math.BigDecimal.valueOf(75 + Math.floorMod(meter.meterSerial().hashCode() * 31, 51), 2))
                 .param("tamperFrom", Timestamp.from(tamperFrom)).param("tamperTo", Timestamp.from(tamperTo))
                 .param("nightFrom", Timestamp.from(nightFrom))
                 .param("zeroFrom", Timestamp.from(zeroFrom)).param("zeroTo", Timestamp.from(zeroTo))

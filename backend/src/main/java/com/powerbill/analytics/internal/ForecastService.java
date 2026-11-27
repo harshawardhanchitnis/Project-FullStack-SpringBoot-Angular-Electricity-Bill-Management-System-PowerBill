@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.powerbill.billing.BillingLedger;
 import com.powerbill.consumer.AccountDirectory.ServicePoint;
 import com.powerbill.metering.MeterUsage;
 import com.powerbill.tariff.TariffPlan;
@@ -30,14 +31,16 @@ class ForecastService {
     static final java.time.ZoneId INDIA = MeterUsage.BILLING_ZONE;
     private final MeterUsage usage;
     private final TariffPricing pricing;
+    private final BillingLedger billing;
     private final MlClient ml;
     private final JsonCache cache;
     private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<Forecast>>
             inFlight = new java.util.concurrent.ConcurrentHashMap<>();
 
-    ForecastService(MeterUsage usage, TariffPricing pricing, MlClient ml, JsonCache cache) {
+    ForecastService(MeterUsage usage, TariffPricing pricing, BillingLedger billing, MlClient ml, JsonCache cache) {
         this.usage = usage;
         this.pricing = pricing;
+        this.billing = billing;
         this.ml = ml;
         this.cache = cache;
     }
@@ -87,38 +90,46 @@ class ForecastService {
             source = "fallback";
         }
 
-        TariffPlan plan = pricing.applicablePlan(point.connectionType(), start);
+        TariffPlan plan = pricing.applicablePlan(point.tariffPlanId(), point.connectionType(), start);
         var actual = usage.intervalReadings(point.meterId(), start.atStartOfDay(INDIA).toInstant(),
                 today.atStartOfDay(INDIA).toInstant()).stream().filter(reading -> !reading.quality().equals("FLAGGED"))
                 .map(reading -> new TariffPricing.Interval(reading.start(), reading.importKwh(), reading.exportKwh()))
                 .toList();
         var shape = usage.hourlyProfile(point.meterId(), today.minusDays(28), today);
-        BigDecimal dailyExport = average(history.subList(Math.max(0, history.size() - 14), history.size()), true);
+        boolean netMetered = point.solarNetMetering();
+        BigDecimal dailyExport = netMetered
+                ? average(history.subList(Math.max(0, history.size() - 14), history.size()), true) : ZERO;
+        // Solar credit carried from last month's bill offsets this cycle's imports, exactly as the bill will.
+        BigDecimal openingCredit = netMetered ? billing.openingCredit(point.meterId(), cycle) : ZERO;
         var quotes = new LinkedHashMap<String, TariffPricing.Quote>();
         for (var band : List.of("p10", "p50", "p90")) {
             var intervals = new ArrayList<>(actual);
             for (var day : bands.daily()) {
-                intervals.addAll(synthesize(day.day(), day.value(band), point.solarNetMetering() ? dailyExport : ZERO,
-                        shape));
+                intervals.addAll(synthesize(day.day(), day.value(band), dailyExport, shape));
             }
-            quotes.put(band, pricing.price(plan, point.sanctionedLoadKw(), point.solarNetMetering(), ZERO, intervals));
+            quotes.put(band, pricing.price(plan, point.sanctionedLoadKw(), netMetered, openingCredit, intervals));
         }
 
         BigDecimal p50Kwh = toDateKwh.add(bands.total("p50"));
+        // Slab thresholds apply to net billable energy, so count down from that, adding each day's expected net use.
+        BigDecimal billableToDate = AnalyticsService.netBillable(point, toDateKwh, toDateExport, openingCredit);
         Integer daysToNextSlab = null;
         BigDecimal nextSlabAt = null;
         for (var slab : plan.slabs()) {
-            if (slab.untilKwh() != null && slab.untilKwh().compareTo(toDateKwh) > 0) {
+            if (slab.untilKwh() != null && slab.untilKwh().compareTo(billableToDate) > 0) {
                 nextSlabAt = slab.untilKwh();
                 break;
             }
         }
         if (nextSlabAt != null) {
-            BigDecimal running = toDateKwh;
+            BigDecimal netImports = toDateKwh;
+            BigDecimal netExports = toDateExport;
             for (int index = 0; index < bands.daily().size(); index++) {
-                running = running.add(bands.daily().get(index).p50());
-                if (running.compareTo(nextSlabAt) >= 0) {
-                    daysToNextSlab = index;
+                netImports = netImports.add(bands.daily().get(index).p50());
+                netExports = netExports.add(dailyExport);
+                BigDecimal billable = AnalyticsService.netBillable(point, netImports, netExports, openingCredit);
+                if (billable.compareTo(nextSlabAt) >= 0) {
+                    daysToNextSlab = index; // 0 means the slab is crossed today
                     break;
                 }
             }

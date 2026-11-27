@@ -130,6 +130,12 @@ class ConsumerStore {
         return db.sql(METER + " WHERE m.id=?").param(meterId).query(Meter.class).optional();
     }
 
+    List<Meter> searchMeters(String text, int limit) {
+        // strpos keeps user text literal: % and _ are not wildcards here.
+        return db.sql(METER + " WHERE strpos(lower(m.meter_serial), lower(?)) > 0 ORDER BY m.meter_serial LIMIT ?")
+                .params(text, limit).query(Meter.class).list();
+    }
+
     List<Meter> demoMeters() {
         return db.sql(METER + " WHERE m.meter_serial LIKE 'M-DEMO-%' ORDER BY m.meter_serial")
                 .query(Meter.class).list();
@@ -137,7 +143,7 @@ class ConsumerStore {
 
     private static final String SERVICE_POINT = """
             SELECT m.id AS meter_id, m.meter_serial, m.connection_type, m.sanctioned_load_kw, m.solar_net_metering,
-                m.solar_capacity_kw, m.status AS meter_status, p.id AS premise_id, p.label AS premise_label,
+                m.solar_capacity_kw, m.tariff_plan_id, m.status AS meter_status, p.id AS premise_id, p.label AS premise_label,
                 p.address_line, p.city, p.state, p.pincode, p.region_zone,
                 a.id AS account_id, a.user_id, a.consumer_number, a.full_name, a.account_type, a.billing_email,
                 a.mobile_number, a.status AS account_status, a.monthly_budget_inr
@@ -169,6 +175,17 @@ class ConsumerStore {
                 """).param("pincodes", List.copyOf(pincodes)).query(UUID.class).list();
     }
 
+    java.util.Map<UUID, String> meterSerials(java.util.Collection<UUID> meterIds) {
+        if (meterIds.isEmpty()) {
+            return java.util.Map.of();
+        }
+        var serials = new java.util.HashMap<UUID, String>();
+        db.sql("SELECT id, meter_serial FROM smart_meters WHERE id IN (:ids)").param("ids", List.copyOf(meterIds))
+                .query((row, index) -> serials.put(row.getObject("id", UUID.class), row.getString("meter_serial")))
+                .list();
+        return serials;
+    }
+
     List<String> pincodes(UUID accountId) {
         return db.sql("SELECT DISTINCT pincode FROM service_premises WHERE consumer_account_id=? ORDER BY pincode")
                 .param(accountId).query(String.class).list();
@@ -185,12 +202,25 @@ class ConsumerStore {
                 row.getBoolean("solar_net_metering"), row.getBigDecimal("solar_capacity_kw"),
                 row.getString("meter_status"), row.getObject("premise_id", UUID.class), row.getString("premise_label"),
                 row.getString("address_line"), row.getString("city"), row.getString("state"), row.getString("pincode"),
-                row.getString("region_zone"), account);
+                row.getString("region_zone"), row.getObject("tariff_plan_id", UUID.class), account);
     }
 
-    boolean autoPay(UUID id, boolean enabled) {
-        return db.sql("UPDATE consumer_accounts SET auto_pay_enabled=?, version=version+1, updated_at=now() WHERE id=?")
-                .params(enabled, id).update() == 1;
+    /** Changes the auto-pay mandate if the account is still at the version the customer saw. */
+    boolean autoPay(UUID id, boolean enabled, long version) {
+        return db.sql("""
+                UPDATE consumer_accounts SET auto_pay_enabled=?, version=version+1, updated_at=now()
+                WHERE id=? AND version=?
+                """).params(enabled, id, version).update() == 1;
+    }
+
+    boolean autoPayEnabled(UUID id) {
+        return db.sql("SELECT auto_pay_enabled FROM consumer_accounts WHERE id=?").param(id).query(Boolean.class)
+                .optional().orElse(false);
+    }
+
+    List<UUID> autoPayAccounts() {
+        return db.sql("SELECT id FROM consumer_accounts WHERE auto_pay_enabled AND status='ACTIVE'")
+                .query(UUID.class).list();
     }
 
     record Account(UUID id, UUID userId, String consumerNumber, String fullName, String accountType,

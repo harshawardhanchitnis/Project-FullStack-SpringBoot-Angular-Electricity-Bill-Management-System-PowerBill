@@ -24,6 +24,11 @@ public interface MeterUsage {
 
     record HourlyUsage(int hour, BigDecimal importKwh, BigDecimal exportKwh) {}
 
+    /** Import and export per meter over [from, to) in IST days, from the daily continuous aggregate. */
+    java.util.Map<UUID, Totals> totalsByMeter(LocalDate from, LocalDate to);
+
+    record Totals(BigDecimal importKwh, BigDecimal exportKwh) {}
+
     record Reading(Instant start, BigDecimal importKwh, BigDecimal exportKwh, BigDecimal voltage,
             BigDecimal powerFactor, String source, String quality) {}
 }

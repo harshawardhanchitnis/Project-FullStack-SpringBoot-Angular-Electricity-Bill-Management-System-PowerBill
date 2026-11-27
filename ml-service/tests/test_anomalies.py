@@ -1,5 +1,16 @@
+import warnings
+from datetime import datetime, timedelta
+
 from app.services import anomaly_detector
 from tests import synthetic
+
+MID_AFTERNOON = datetime(2026, 11, 20, 13, tzinfo=synthetic.IST)
+
+
+def _assert_within_readings(findings, readings):
+    first, last = readings[0][0], readings[-1][0] + timedelta(hours=1)
+    for finding in findings:
+        assert first <= finding.start < finding.end <= last
 
 
 def test_clean_telemetry_raises_no_high_severity_anomalies():
@@ -67,3 +78,30 @@ def test_detects_a_night_baseload_jump_on_a_large_commercial_load():
     findings = anomaly_detector.detect([tuple(r) for r in readings], solar=False)
     spike = next(f for f in findings if f.anomaly_type == "SPIKE")
     assert "Nighttime baseload jumped" in spike.reasons[0]["detail"]
+
+
+def test_a_night_jump_is_found_when_readings_start_mid_afternoon():
+    # The first reading is 13:00 IST, so a grid anchored on it would read 13:00-18:00 as the "night" hours.
+    readings = synthetic.hourly(seed=6, end=MID_AFTERNOON)
+    assert readings[0][0].hour == 13
+    synthetic.inject_night_jump(readings)
+    findings = anomaly_detector.detect([tuple(r) for r in readings], solar=False)
+    spike = next(f for f in findings if f.anomaly_type == "SPIKE")
+    assert spike.severity in ("MEDIUM", "HIGH")
+    assert "Nighttime baseload jumped" in spike.reasons[0]["detail"]
+    # The jump is injected into the last 144 readings, whose first night is 15 Nov 00:00-06:00 IST.
+    assert spike.start == datetime(2026, 11, 15, tzinfo=synthetic.IST)
+    assert spike.end == MID_AFTERNOON
+    _assert_within_readings(findings, readings)
+
+
+def test_gaps_and_partial_days_never_emit_runtime_warnings():
+    readings = synthetic.hourly(seed=6, end=MID_AFTERNOON)
+    synthetic.inject_night_jump(readings)
+    del readings[20 * 24 : 21 * 24 + 6]  # a 30-hour outage in the feed swallows a whole night
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        findings = anomaly_detector.detect([tuple(r) for r in readings], solar=False)
+    assert any(f.anomaly_type == "SPIKE" for f in findings)
+    assert all(0 <= f.score <= 100 for f in findings)
+    _assert_within_readings(findings, readings)

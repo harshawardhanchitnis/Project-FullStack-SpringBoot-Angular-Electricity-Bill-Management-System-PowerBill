@@ -120,7 +120,12 @@ export class NotificationStore {
     effect(() => {
       const token = this.auth.token();
       if (token) this.connect(token);
-      else this.disconnect();
+      else {
+        // Signed out: close the stream and forget the previous user's inbox.
+        this.disconnect();
+        this.items.set([]);
+        this.unread.set(0);
+      }
     });
   }
 
@@ -175,7 +180,8 @@ export class NotificationStore {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        buffer += value;
+        // SSE allows CRLF, LF or CR line endings; normalise before splitting events on blank lines.
+        buffer = (buffer + value).replace(/\r\n?/g, '\n');
         let boundary = buffer.indexOf('\n\n');
         while (boundary >= 0) {
           this.handle(buffer.slice(0, boundary));
@@ -196,20 +202,26 @@ export class NotificationStore {
     }
   }
 
-  private handle(block: string): void {
+  /** Parses one SSE event block. Malformed frames are skipped rather than breaking the stream. */
+  handle(block: string): void {
     let event = 'message';
     const data: string[] = [];
     for (const line of block.split('\n')) {
       if (line.startsWith('event:')) event = line.slice(6).trim();
-      else if (line.startsWith('data:')) data.push(line.slice(5));
+      else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
     }
     if (!data.length) return;
-    const payload = JSON.parse(data.join('\n'));
-    if (event === 'ready') this.unread.set(payload.unread);
-    if (event === 'notification') {
-      const item = payload.notification as Notification;
+    let payload: { unread?: number; notification?: Notification };
+    try {
+      payload = JSON.parse(data.join('\n'));
+    } catch {
+      return;
+    }
+    if (typeof payload !== 'object' || payload === null) return;
+    if (typeof payload.unread === 'number') this.unread.set(payload.unread);
+    const item = payload.notification;
+    if (event === 'notification' && item && typeof item.id === 'string') {
       this.items.update((items) => [item, ...items.filter((entry) => entry.id !== item.id)].slice(0, 50));
-      this.unread.set(payload.unread);
       this.toasts.show(`${item.title}: ${item.message}`, 'info', 6000);
     }
   }

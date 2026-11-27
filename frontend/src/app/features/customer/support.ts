@@ -128,7 +128,7 @@ export function slaText(complaint: Complaint): { text: string; tone: string } {
         </div>
         @if (formError()) { <p role="alert" class="rounded-lg bg-bad-soft p-3 text-sm">{{ formError() }}</p> }
       </form>
-      <div dialog-footer class="flex justify-end gap-2 border-t border-line p-4">
+      <div dialog-footer class="empty:hidden flex justify-end gap-2 border-t border-line p-4">
         <button type="button" class="btn-secondary" (click)="wizardOpen.set(false)">Cancel</button>
         <button type="submit" form="complaint-form" class="btn-primary" [disabled]="busy()">Submit complaint</button>
       </div>
@@ -179,7 +179,7 @@ export function slaText(complaint: Complaint): { text: string; tone: string } {
         }
         @if (d.complaint.csatRating) { <p class="mt-4 text-sm text-muted">You rated this {{ d.complaint.csatRating }}/5. Thank you.</p> }
       }
-      <div dialog-footer class="border-t border-line p-4">
+      <div dialog-footer class="empty:hidden border-t border-line p-4">
         @if (detail() && detail()!.complaint.status !== 'CLOSED') {
           <form class="flex gap-2" (ngSubmit)="reply()">
             <label class="sr-only" for="reply">Reply</label>

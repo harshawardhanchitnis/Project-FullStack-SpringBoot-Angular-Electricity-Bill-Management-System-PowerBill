@@ -86,6 +86,35 @@ class MeteringService implements MeterUsage, com.powerbill.metering.AnomalyRegis
         return store.readings(meterId, from, to);
     }
 
+    /** Hourly readings for staff with the hours that have no reading, over at most seven days. */
+    List<com.powerbill.consumer.MeterDirectory.Meter> searchMeters(String text, int limit) {
+        return directory.searchMeters(text, limit);
+    }
+
+    Intervals staffIntervals(UUID meterId, Instant from, Instant to) {
+        if (!from.isBefore(to) || java.time.Duration.between(from, to).compareTo(java.time.Duration.ofDays(7)) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose a window of up to seven days.");
+        }
+        var meter = directory.meter(meterId);
+        var readings = store.readings(meterId, from, to);
+        var present = new java.util.HashSet<Instant>();
+        readings.forEach(reading -> present.add(reading.start()));
+        var missing = new ArrayList<Instant>();
+        // Intervals start on IST hours, which fall on half past the hour in UTC.
+        Instant first = from.atZone(BILLING_ZONE).truncatedTo(java.time.temporal.ChronoUnit.HOURS).toInstant();
+        for (Instant hour = first; hour.isBefore(to);
+                hour = hour.plus(java.time.Duration.ofHours(1))) {
+            if (!present.contains(hour) && hour.isBefore(Instant.now())) {
+                missing.add(hour);
+            }
+        }
+        long flagged = readings.stream().filter(reading -> reading.quality().equals("FLAGGED")).count();
+        return new Intervals(meter.id(), meter.meterSerial(), readings, missing, flagged);
+    }
+
+    record Intervals(UUID meterId, String meterSerial, List<Reading> readings, List<Instant> missing,
+            long flaggedCount) {}
+
     @Override
     @Transactional
     public java.util.Optional<UUID> record(UUID meterId, Instant windowStart, Instant windowEnd, String type,
@@ -116,6 +145,16 @@ class MeteringService implements MeterUsage, com.powerbill.metering.AnomalyRegis
     @Override
     public List<HourlyUsage> hourlyProfile(UUID meterId, LocalDate from, LocalDate to) {
         return store.hourly(meterId, from.atStartOfDay(BILLING_ZONE).toInstant(), to.atStartOfDay(BILLING_ZONE).toInstant());
+    }
+
+    @Override
+    public java.util.Map<UUID, Totals> totalsByMeter(LocalDate from, LocalDate to) {
+        return store.totals(from.atStartOfDay(BILLING_ZONE).toInstant(), to.atStartOfDay(BILLING_ZONE).toInstant());
+    }
+
+    @Override
+    public java.util.Map<UUID, Integer> openByMeter() {
+        return store.openAnomaliesByMeter();
     }
 
     private static String veeDetail(String reason) {

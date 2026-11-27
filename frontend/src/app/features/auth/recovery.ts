@@ -2,6 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { LucideEye, LucideEyeOff } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { problemMessage } from '../../core/ui-state';
 
@@ -57,7 +58,7 @@ export class ForgotPassword {
 }
 
 @Component({
-  imports: [ReactiveFormsModule, RouterLink],
+  imports: [ReactiveFormsModule, RouterLink, LucideEye, LucideEyeOff],
   template: `
     <h1 class="h-page">Choose a new password</h1>
     @if (done()) {
@@ -71,12 +72,29 @@ export class ForgotPassword {
       <form class="mt-6 space-y-4" [formGroup]="form" (ngSubmit)="submit()" novalidate>
         <div>
           <label class="label" for="new-password">New password</label>
-          <input id="new-password" class="input" type="password" formControlName="password" autocomplete="new-password" />
-          <p class="hint">At least 12 characters.</p>
+          <div class="relative">
+            <input id="new-password" class="input pr-11" [type]="revealNew() ? 'text' : 'password'" formControlName="password"
+                   autocomplete="new-password" aria-describedby="new-password-hint" />
+            <button type="button" class="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-faint hover:text-ink"
+                    [attr.aria-label]="revealNew() ? 'Hide new password' : 'Show new password'" (click)="revealNew.set(!revealNew())">
+              @if (revealNew()) { <svg lucideEyeOff [size]="17" aria-hidden="true"></svg> }
+              @else { <svg lucideEye [size]="17" aria-hidden="true"></svg> }
+            </button>
+          </div>
+          <p id="new-password-hint" class="hint">At least 12 characters.</p>
         </div>
         <div>
           <label class="label" for="confirm-password">Confirm password</label>
-          <input id="confirm-password" class="input" type="password" formControlName="confirm" autocomplete="new-password" />
+          <div class="relative">
+            <input id="confirm-password" class="input pr-11" [type]="revealConfirm() ? 'text' : 'password'" formControlName="confirm"
+                   autocomplete="new-password" [attr.aria-invalid]="mismatch()" />
+            <button type="button" class="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-faint hover:text-ink"
+                    [attr.aria-label]="revealConfirm() ? 'Hide confirmed password' : 'Show confirmed password'"
+                    (click)="revealConfirm.set(!revealConfirm())">
+              @if (revealConfirm()) { <svg lucideEyeOff [size]="17" aria-hidden="true"></svg> }
+              @else { <svg lucideEye [size]="17" aria-hidden="true"></svg> }
+            </button>
+          </div>
           @if (mismatch()) { <p class="field-error">The passwords do not match.</p> }
         </div>
         <button type="submit" class="btn-primary w-full" [disabled]="busy()">Change password</button>
@@ -91,6 +109,8 @@ export class ResetPassword {
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly mismatch = signal(false);
+  protected readonly revealNew = signal(false);
+  protected readonly revealConfirm = signal(false);
   protected readonly form = inject(NonNullableFormBuilder).group({
     password: ['', [Validators.required, Validators.minLength(12), Validators.maxLength(128)]],
     confirm: ['', Validators.required],

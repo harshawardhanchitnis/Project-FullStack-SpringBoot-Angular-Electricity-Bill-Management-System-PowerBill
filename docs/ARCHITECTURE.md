@@ -91,6 +91,9 @@ rephrase the answer; any rephrasing that contains a number absent from the facts
 | Access token in memory, refresh token in an HttpOnly cookie | Nothing sensitive is stored in `localStorage`; refresh rotation detects token reuse and revokes the session family. |
 | Fetch-based Server-Sent Events | The stream carries the bearer token in a header rather than a URL. Persisted notifications remain the source of truth after reconnects. |
 | No inline styles | Components use Tailwind utilities only, so the CSP can keep `style-src 'self'`. |
+| Auth state cached in Redis for 60 seconds | Every request checks the user's status, role and session version. The cache answers that without a PostgreSQL query and is evicted on any password, role, status or session change; if Redis fails, the check reads PostgreSQL. |
+| Per-user AI rate limits with Bucket4j | Copilot chat, ticket triage and forecasts use token buckets in Redis updated with compare-and-swap, so concurrent requests cannot exceed the limit, and every Core API instance shares the same budget. |
+| Versioned cache keys instead of key scans | Dashboard caches embed per-account and per-area generation counters. Payments, adjustments and outages bump the counter, so stale entries are never read and nothing has to scan Redis. |
 
 ## Differences from the implementation brief
 
@@ -101,20 +104,24 @@ the reason, so reviewers can tell a deliberate choice from an omission.
 | --- | --- | --- |
 | PrimeNG components | Tailwind CSS v4 with GridIQ's own components: a dialog and side drawer with a focus trap, pager, KPI card, status badge, empty state, error banner and toasts | PrimeNG and the Angular CDK inject inline styles, which the CSP (`style-src 'self'`) blocks. Keeping the CSP strict mattered more than the library. |
 | LightGBM or XGBoost, and statsmodels | scikit-learn `HistGradientBoostingRegressor` with quantile loss (the same histogram gradient-boosting method) and an additive Holt-Winters model written in NumPy | Fewer native dependencies in the ML image. Forecasts meet the brief's accuracy gate (MAPE under 15% on the synthetic benchmark). |
-| Spring Data JPA with `ddl-auto: validate` | `JdbcClient` and records | See Decisions. The JPA starter is still on the classpath, but no entities are mapped. |
+| Spring Data JPA with `ddl-auto: validate` | `JdbcClient` and records, with `spring-boot-starter-jdbc` (the JPA starter was removed) | See Decisions. Flyway owns the schema. |
 | WebSocket (STOMP) or Server-Sent Events | Server-Sent Events | The brief allows either. See Decisions. |
 | OpenTelemetry traces | A correlation ID (`X-Request-Id`) passed from Nginx through the Core API to the ML service, and included in logs and error responses | Distributed traces are not exported. Metrics are covered by Micrometer and the optional Prometheus and Grafana profile. |
 | Copilot retrieval with pgvector or FAISS, and model tool calling | TF-IDF retrieval over six local guides. The Core API assembles a read-only context of the customer's bills, forecast, tariff and anomalies, and the answer is built from it. | The knowledge base is small, and building answers from Core API data keeps every figure exact. An optional LLM rewrite is rejected if it introduces a number that is not in that data. |
 | `ledger_entries.running_balance` | Double-entry journals (`ledger_journals` and `ledger_entries`) that must balance at commit; statements calculate the running balance when read | A stored running balance would need serialized writes per account and could drift from the journals. |
-| An `AUTO_PAY` payment method with mandate execution | An `auto_pay_enabled` flag on the account | Mandates are not executed; see Known limits. |
-| Stripe and Razorpay test-mode adapters | The HMAC-signed sandbox gateway. The webhook route takes the provider name, but there is no gateway adapter interface yet. | Running without paid accounts or keys. See Known limits. |
+| An `AUTO_PAY` payment method with mandate execution | Customers turn auto-pay on or off (`PATCH /consumers/me/auto-pay`). Each issued bill on an enrolled account is paid with method `AUTO_PAY` (migration V7) through the gateway's signed webhook path, with an idempotency key derived from the bill. A daily 06:30 IST sweep, also run on demand with `POST /ops/payments/auto-pay/run`, pays bills that were open before enrolment. | There is no bank mandate registration (e-NACH or UPI AutoPay); the sandbox gateway approves the charge. |
+| Stripe and Razorpay test-mode adapters | A `PaymentGateway` interface, chosen per webhook provider by `PaymentGateways`, with the HMAC-signed sandbox as its only implementation | Running without paid accounts or keys. A Stripe or Razorpay adapter would implement the same interface and webhook verification. |
 | Outage statuses `INVESTIGATING` to `RESOLVED` | Adds `SCHEDULED` (migration V6), the starting status for planned maintenance | "Investigating" describes an unplanned fault, not scheduled work. |
 | ML endpoints `/copilot/respond` (brief) or `/copilot/chat` (roadmap) | `/ml/v1/copilot/respond` and `/ml/v1/copilot/triage` | Follows the brief. Triage serves the support desk assistant. |
-| `@defer` blocks for heavy charts | ECharts loaded through a dynamic import on the first chart render | Same effect: ECharts stays out of the initial bundle (94 kB gzipped). |
-| k6 load test with 100 virtual users and a mixed workload (roadmap) | k6 smoke test with 25 virtual users on the customer read paths (p95 of 22 ms) | Meets the brief's smoke gate of p95 under 250 ms. The mixed payment and ingestion workload was not run. |
+| `@defer` blocks for heavy charts | ECharts loaded through a dynamic import on the first chart render; the confirmation dialog uses `@defer` | Same effect: ECharts, the icon set and the dialog code stay out of the initial bundle (343 kB, 91 kB gzipped). |
+| k6 load test with 100 virtual users and a mixed workload (roadmap) | `K6_PROFILE=mixed`: 100 virtual users on the customer read paths plus forecasts, Copilot chat and the executive overview at fixed arrival rates (p95 of 10 ms, 0% errors over 29,283 requests); the default smoke profile uses 25 | Payments and ingestion are not in the load mix, because each payment is a real ledger write that would change the demo data. |
+| Regional AT&C loss heatmap | A regional table on the executive overview: metered vs billed energy (a loss proxy), collection efficiency, overdue amounts and open anomalies for the last three billed months | The demo data has no feeder or distribution transformer topology, so technical losses cannot be separated; the proxy measures commercial and data-quality gaps. |
 
-Roadmap items not built: AT&C loss analytics and a regional loss heatmap, a neighbourhood usage comparison, a Kanban
-view of the support desk, global search, CSV export from tables, README screenshots, and a Lighthouse
+Built from the roadmap in the polish pass: an anonymous peer comparison on the customer dashboard (last 30 days
+against meters of the same connection type and load band, shown only when at least four peers exist), the regional
+loss-proxy table, a Kanban view of the support desk, a Ctrl+K / Cmd+K command palette with record search, CSV export
+from tables, VEE tools for staff (interval inspection, estimation, audited revision, CSV and Green Button import and
+the AMI simulator), a tariff draft editor and README screenshots. Not built: a map-based loss heatmap and a Lighthouse
 accessibility audit. Interactive API docs are on at `/swagger-ui.html` and `/v3/api-docs` on the Core API in the dev
 profile, and Nginx blocks both at the edge.
 
@@ -135,8 +142,9 @@ self-hosting under the Timescale License. The Redis 7.2 series is BSD 3-Clause l
 
 ## Known limits
 
-- SSE fan-out is held in memory, so live notifications reach clients connected to the same Core API instance. Running
-  several instances would need Redis pub/sub for fan-out; persisted notifications are unaffected.
+- Live notifications fan out through Redis pub/sub (channel `gridiq:notifications`), so every Core API instance
+  delivers them to its own SSE clients. A message published while Redis is down is lost; the notification itself is
+  persisted and appears on the next fetch.
 - The ML service runs two Uvicorn workers. Prometheus metrics from the service reflect the worker that serves the scrape.
-- Only the built-in sandbox gateway is implemented. Stripe or Razorpay adapters would post to the same webhook handler.
-- Auto-pay mandates are stored on the account but not executed.
+- Only the built-in sandbox gateway is implemented. Stripe or Razorpay adapters would implement `PaymentGateway`.
+- Auto-pay charges go through the sandbox gateway; no bank mandate is registered.

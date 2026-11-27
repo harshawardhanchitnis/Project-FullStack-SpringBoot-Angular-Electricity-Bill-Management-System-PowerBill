@@ -10,6 +10,9 @@ public interface MeterDirectory {
     Meter meter(UUID meterId);
     List<Meter> demoMeters();
 
+    /** Meters whose serial contains the text (case-insensitive), for staff tools. */
+    List<Meter> searchMeters(String text, int limit);
+
     record Meter(UUID id, UUID premiseId, String meterSerial, String connectionType,
             BigDecimal sanctionedLoadKw, boolean solarNetMetering, BigDecimal solarCapacityKw,
             UUID tariffPlanId, String status, OffsetDateTime installedAt, long version) {}

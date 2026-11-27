@@ -7,6 +7,7 @@ import { TariffPlan } from '../../core/models';
 import { Toasts, problemMessage } from '../../core/ui-state';
 import { FORMAT_PIPES } from '../../shared/format';
 import { Dialog, ErrorBanner, StatusBadge } from '../../shared/ui';
+import { ConfirmService } from '../../shared/confirm';
 
 function tomorrow(): string {
   const now = new Date(Date.now() + 5.5 * 3600 * 1000);
@@ -57,6 +58,7 @@ function tomorrow(): string {
             <div class="mt-4 flex gap-2">
               <button type="button" class="btn-secondary btn-sm" (click)="draftFrom(plan)"><svg lucideCopy [size]="14" aria-hidden="true"></svg> New version</button>
               @if (!plan.active) {
+                <button type="button" class="btn-secondary btn-sm" [disabled]="busy()" (click)="editDraft(plan)">Edit draft</button>
                 <button type="button" class="btn-primary btn-sm" [disabled]="busy()" (click)="activate(plan)">Activate</button>
               }
             </div>
@@ -67,7 +69,8 @@ function tomorrow(): string {
     }
     </div>
 
-    <app-dialog [open]="!!draft()" heading="New tariff version" [subheading]="draft() ? draft()!.code + ' · ' + draft()!.connectionType : ''" (closed)="draft.set(null)">
+    <app-dialog [open]="!!draft()" [heading]="editingId() ? 'Edit draft version' : 'New tariff version'"
+                [subheading]="draft() ? draft()!.code + ' · ' + draft()!.connectionType : ''" (closed)="draft.set(null)">
       @if (draft(); as d) {
         <form id="tariff-form" class="space-y-4 text-sm" (ngSubmit)="save()">
           <div class="grid gap-3 sm:grid-cols-2">
@@ -76,15 +79,36 @@ function tomorrow(): string {
             <div><label class="label" for="t-fixed">Fixed charge per kW (₹)</label><input id="t-fixed" class="input num" type="number" step="0.01" name="fixed" [(ngModel)]="d.fixedChargePerKw" /></div>
             <div><label class="label" for="t-fac">FAC per kWh (₹)</label><input id="t-fac" class="input num" type="number" step="0.01" name="fac" [(ngModel)]="d.facPerKwh" /></div>
             <div><label class="label" for="t-duty">Electricity duty (%)</label><input id="t-duty" class="input num" type="number" step="0.1" name="duty" [(ngModel)]="d.electricityDutyPct" /></div>
+            <div><label class="label" for="t-gst">GST (%)</label><input id="t-gst" class="input num" type="number" step="0.1" min="0" name="gst" [(ngModel)]="d.gstPct" /></div>
+            <div><label class="label" for="t-policy">Rooftop solar surplus</label>
+              <select id="t-policy" class="input" name="policy" [(ngModel)]="d.solarPolicy">
+                <option value="CARRY_FORWARD">Carry forward as kWh credit</option>
+                <option value="CASH_CREDIT">Credit in cash at the export rate</option>
+              </select></div>
+            <div><label class="label" for="t-export">Solar export rate (₹/kWh)</label><input id="t-export" class="input num" type="number" step="0.01" min="0" name="export" [(ngModel)]="d.solarExportRatePerKwh" /></div>
+            <div><label class="label" for="t-grace">Grace days before late fees</label><input id="t-grace" class="input num" type="number" step="1" min="0" name="grace" [(ngModel)]="d.graceDays" /></div>
+            <div><label class="label" for="t-late">Late fee per day (%)</label><input id="t-late" class="input num" type="number" step="0.01" min="0" name="late" [(ngModel)]="d.lateFeeDailyPct" /></div>
+            <div><label class="label" for="t-cap">Late fee cap (%)</label><input id="t-cap" class="input num" type="number" step="0.1" min="0" name="cap" [(ngModel)]="d.lateFeeCapPct" /></div>
           </div>
           <fieldset>
-            <legend class="label">Slab rates (₹/kWh)</legend>
-            <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              @for (slab of d.slabs; track $index) {
-                <div><label class="text-xs text-faint" [for]="'slab-' + $index">{{ slab.fromKwh }}–{{ slab.untilKwh ?? '∞' }} kWh</label>
-                  <input class="input num" type="number" step="0.01" [id]="'slab-' + $index" [name]="'slab-' + $index" [(ngModel)]="slab.ratePerKwh" /></div>
+            <legend class="label">Telescopic slabs</legend>
+            <p class="hint">Each slab starts where the previous one ends; the last slab has no upper limit.</p>
+            <div class="mt-2 space-y-2">
+              @for (slab of d.slabs; track $index; let last = $last; let index = $index) {
+                <div class="grid grid-cols-[auto_1fr_1fr_auto] items-end gap-2">
+                  <span class="num pb-2 text-xs text-faint">{{ index + 1 }}</span>
+                  <div><label class="text-xs text-faint" [for]="'until-' + index">Up to kWh (from {{ slab.fromKwh }})</label>
+                    @if (last) { <p class="input num bg-sunken text-faint" [id]="'until-' + index">No limit</p> }
+                    @else { <input class="input num" type="number" step="1" [min]="slab.fromKwh + 1" [id]="'until-' + index" [name]="'until-' + index"
+                                   [ngModel]="slab.untilKwh" (ngModelChange)="setUntil(d, index, $event)" /> }</div>
+                  <div><label class="text-xs text-faint" [for]="'slab-' + index">Rate (₹/kWh)</label>
+                    <input class="input num" type="number" step="0.01" min="0" [id]="'slab-' + index" [name]="'slab-' + index" [(ngModel)]="slab.ratePerKwh" /></div>
+                  <button type="button" class="btn-ghost btn-sm" [disabled]="d.slabs.length <= 1" (click)="removeSlab(d, index)"
+                          [attr.aria-label]="'Remove slab ' + (index + 1)">Remove</button>
+                </div>
               }
             </div>
+            <button type="button" class="btn-secondary btn-sm mt-2" [disabled]="d.slabs.length >= 8" (click)="addSlab(d)">Add slab</button>
           </fieldset>
           <fieldset>
             <legend class="label">Time-of-day multipliers</legend>
@@ -98,9 +122,9 @@ function tomorrow(): string {
           @if (formError()) { <p role="alert" class="rounded-lg bg-bad-soft p-3">{{ formError() }}</p> }
         </form>
       }
-      <div dialog-footer class="flex justify-end gap-2 border-t border-line p-4">
+      <div dialog-footer class="empty:hidden flex justify-end gap-2 border-t border-line p-4">
         <button type="button" class="btn-secondary" (click)="draft.set(null)">Cancel</button>
-        <button type="submit" form="tariff-form" class="btn-primary" [disabled]="busy()">Save draft</button>
+        <button type="submit" form="tariff-form" class="btn-primary" [disabled]="busy()">{{ editingId() ? 'Save changes' : 'Save draft' }}</button>
       </div>
     </app-dialog>
   `,
@@ -108,9 +132,12 @@ function tomorrow(): string {
 export class Tariffs {
   private readonly http = inject(HttpClient);
   private readonly toasts = inject(Toasts);
+  private readonly confirm = inject(ConfirmService);
   protected readonly plans = signal<TariffPlan[]>([]);
   protected readonly error = signal<string | null>(null);
   protected readonly draft = signal<TariffPlan | null>(null);
+  /** Set while editing an unpublished draft (PUT); null when creating a new version (POST). */
+  protected readonly editingId = signal<string | null>(null);
   protected readonly busy = signal(false);
   protected readonly formError = signal<string | null>(null);
   protected readonly minDate = tomorrow();
@@ -137,7 +164,38 @@ export class Tariffs {
 
   protected draftFrom(plan: TariffPlan): void {
     this.formError.set(null);
+    this.editingId.set(null);
     this.draft.set({ ...structuredClone(plan), name: plan.name, effectiveFrom: this.minDate, effectiveTo: null });
+  }
+
+  /** Opens an unpublished draft for editing; published versions are never edited. */
+  protected editDraft(plan: TariffPlan): void {
+    this.formError.set(null);
+    this.editingId.set(plan.id);
+    this.draft.set(structuredClone(plan));
+  }
+
+  /** Moves a slab boundary and keeps the next slab starting exactly there. */
+  protected setUntil(plan: TariffPlan, index: number, value: number | null): void {
+    const until = value === null ? null : Number(value);
+    plan.slabs[index].untilKwh = until;
+    if (until !== null && plan.slabs[index + 1]) plan.slabs[index + 1].fromKwh = until;
+  }
+
+  /** Splits the open-ended last slab, adding a new tier 100 kWh wide before it. */
+  protected addSlab(plan: TariffPlan): void {
+    const last = plan.slabs[plan.slabs.length - 1];
+    const from = last.fromKwh;
+    plan.slabs.splice(plan.slabs.length - 1, 0, { fromKwh: from, untilKwh: from + 100, ratePerKwh: last.ratePerKwh });
+    last.fromKwh = from + 100;
+  }
+
+  /** Removes a slab and joins its neighbours so the tiers stay contiguous. */
+  protected removeSlab(plan: TariffPlan, index: number): void {
+    if (plan.slabs.length <= 1) return;
+    const [removed] = plan.slabs.splice(index, 1);
+    if (plan.slabs[index]) plan.slabs[index].fromKwh = removed.fromKwh;
+    else plan.slabs[index - 1].untilKwh = null;
   }
 
   protected async save(): Promise<void> {
@@ -145,14 +203,18 @@ export class Tariffs {
     if (!d) return;
     this.busy.set(true);
     try {
-      await firstValueFrom(this.http.post<TariffPlan>('/api/v1/ops/tariffs', {
+      const body = {
         code: d.code, name: d.name, connectionType: d.connectionType, effectiveFrom: d.effectiveFrom, effectiveTo: null,
         fixedChargePerKw: d.fixedChargePerKw, facPerKwh: d.facPerKwh, electricityDutyPct: d.electricityDutyPct, gstPct: d.gstPct,
         solarExportRatePerKwh: d.solarExportRatePerKwh, solarPolicy: d.solarPolicy, lateFeeDailyPct: d.lateFeeDailyPct,
         lateFeeCapPct: d.lateFeeCapPct, graceDays: d.graceDays, slabs: d.slabs, windows: d.windows,
-      }));
+      };
+      const editing = this.editingId();
+      await firstValueFrom(editing
+        ? this.http.put<TariffPlan>(`/api/v1/ops/tariffs/${editing}`, body)
+        : this.http.post<TariffPlan>('/api/v1/ops/tariffs', body));
       this.draft.set(null);
-      this.toasts.success('Draft saved. Activate it to publish.');
+      this.toasts.success(editing ? 'Draft updated.' : 'Draft saved. Activate it to publish.');
       await this.load();
     } catch (error) {
       this.formError.set(problemMessage(error));
@@ -162,7 +224,12 @@ export class Tariffs {
   }
 
   protected async activate(plan: TariffPlan): Promise<void> {
-    if (!confirm(`Activate ${plan.code} version ${plan.version} from ${plan.effectiveFrom}? The previous version ends that day.`)) return;
+    const confirmed = await this.confirm.ask({
+      title: `Activate ${plan.code} version ${plan.version}?`,
+      message: `It applies from ${plan.effectiveFrom}, and the previous version ends that day. Bills for later periods use the new rates.`,
+      confirmLabel: 'Activate version',
+    });
+    if (!confirmed) return;
     this.busy.set(true);
     try {
       await firstValueFrom(this.http.patch(`/api/v1/ops/tariffs/${plan.id}/activate`, null));

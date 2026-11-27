@@ -66,4 +66,27 @@ class JsonCache {
             LOG.debug("Analytics cache eviction skipped");
         }
     }
+
+    /**
+     * Current value of a generation counter, used as part of a cache key. Bumping the counter makes every key built
+     * from the old value unreachable at once, without scanning Redis. Returns -1 if Redis is unavailable, so the
+     * key changes and a stale entry is never served.
+     */
+    long generation(String name) {
+        try {
+            String value = redis.opsForValue().get(PREFIX + "generation:" + name);
+            return value == null ? 0 : Long.parseLong(value);
+        } catch (DataAccessException | NumberFormatException error) {
+            return -1;
+        }
+    }
+
+    void bump(String name) {
+        try {
+            redis.opsForValue().increment(PREFIX + "generation:" + name);
+            redis.expire(PREFIX + "generation:" + name, Duration.ofDays(2));
+        } catch (DataAccessException error) {
+            LOG.debug("Analytics cache generation bump skipped");
+        }
+    }
 }

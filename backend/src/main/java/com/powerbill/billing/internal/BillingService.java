@@ -80,7 +80,7 @@ class BillingService implements BillingLedger, com.powerbill.billing.BillingStat
         }
         TariffPlan plan;
         try {
-            plan = pricing.applicablePlan(point.connectionType(), start);
+            plan = pricing.applicablePlan(point.tariffPlanId(), point.connectionType(), start);
         } catch (ResponseStatusException missing) {
             throw new BillingProblem("NO_TARIFF", "No active tariff covers " + month + ".");
         }
@@ -266,6 +266,8 @@ class BillingService implements BillingLedger, com.powerbill.billing.BillingStat
         store.markPaidIfCleared(billId);
         events.publishEvent(AuditAction.record(type + "_NOTE_ISSUED", "BILL", billId, actor, role, request,
                 Map.of("noteNumber", number, "amount", amount.toPlainString())));
+        events.publishEvent(new BillingEvents.BillAdjusted(billId, bill.billNumber(), bill.consumerAccountId(), number,
+                type, amount));
         return store.bill(billId, false).orElseThrow();
     }
 
@@ -384,6 +386,12 @@ class BillingService implements BillingLedger, com.powerbill.billing.BillingStat
     }
 
     @Override
+    public BigDecimal openingCredit(UUID meterId, YearMonth cycle) {
+        YearMonth previous = cycle.minusMonths(1);
+        return store.closingCredit(meterId, previous.getYear(), previous.getMonthValue());
+    }
+
+    @Override
     public List<MonthlyRevenue> revenueByMonth(int months) {
         return store.revenue(Math.min(Math.max(months, 1), 36));
     }
@@ -396,6 +404,11 @@ class BillingService implements BillingLedger, com.powerbill.billing.BillingStat
     @Override
     public List<SlabBand> slabDistribution(int months) {
         return store.slabs(Math.min(Math.max(months, 1), 36));
+    }
+
+    @Override
+    public List<MeterBilling> billingByMeter(YearMonth from, YearMonth to) {
+        return store.billingByMeter(from, to);
     }
 
     static BillHeader header(BillRow bill) {

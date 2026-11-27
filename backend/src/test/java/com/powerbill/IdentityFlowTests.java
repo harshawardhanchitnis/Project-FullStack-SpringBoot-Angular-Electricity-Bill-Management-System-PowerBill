@@ -96,6 +96,14 @@ class IdentityFlowTests extends IntegrationTestSupport {
             assertThat(audit.statusCode()).isEqualTo(200);
             if (audit.body().contains("CONSUMER_STATUS_CHANGED")) {
                 assertThat(audit.body()).contains("phase2-integration");
+                // Entries carry the recorded change set and who made it.
+                for (JsonNode entry : json(audit).path("content")) {
+                    if (entry.path("action").asText().equals("CONSUMER_STATUS_CHANGED")) {
+                        assertThat(entry.path("afterState").isObject()).isTrue();
+                        assertThat(entry.path("actorEmail").asText()).endsWith("@demo.powerbill.invalid");
+                        assertThat(entry.path("actorName").asText()).isNotBlank();
+                    }
+                }
                 return;
             }
             Thread.sleep(200);

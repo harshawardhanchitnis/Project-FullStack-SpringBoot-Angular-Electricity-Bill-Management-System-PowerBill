@@ -9,6 +9,12 @@ public interface TariffPricing {
 
     TariffPlan applicablePlan(String connectionType, LocalDate date);
 
+    /**
+     * The plan for a meter on a date: its explicit override when that plan is active and in effect on the date,
+     * otherwise the active plan for its connection type.
+     */
+    TariffPlan applicablePlan(java.util.UUID meterPlanId, String connectionType, LocalDate date);
+
     Quote price(TariffPlan plan, BigDecimal sanctionedLoadKw, boolean netMetering,
             BigDecimal previousCreditKwh, List<Interval> intervals);
 

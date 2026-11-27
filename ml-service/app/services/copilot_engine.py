@@ -7,24 +7,40 @@ and forecast) or derived from it with simple arithmetic shown in the answer. Not
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 from app.services.rag_store import RagStore
 
-INTENTS: list[tuple[str, tuple[str, ...]]] = [
-    ("outage", ("outage", "power cut", "no power", "no electricity", "restor", "blackout")),
-    ("payment", ("pay", "due", "outstanding", "late fee", "surcharge", "overdue", "receipt")),
-    ("bill_change", ("why", "increase", "higher", "rise", "rose", "jump", "spike", "more than last", "compare")),
-    ("forecast", ("forecast", "next bill", "predict", "estimate", "projected", "end of month", "this month")),
-    ("save", ("save", "reduce", "lower", "tip", "cheaper", "peak", "time of day", "tod", "shift")),
-    ("solar", ("solar", "net meter", "export", "rooftop", "prosumer")),
-    ("slab", ("slab", "tier", "telescopic", "rate per unit", "per kwh")),
-    ("anomaly", ("anomal", "tamper", "unusual", "meter fault", "strange")),
-    ("complaint", ("complaint", "ticket", "support", "issue")),
-    ("explain_bill", ("bill", "charge", "invoice", "breakdown", "fixed charge", "duty", "fac")),
+# Each keyword is a regular expression matched at the start of a word (so "pay" matches "payment" but "tod\b" does
+# not match "today"), weighted by how strongly it signals the intent. The intent with the highest total wins and a
+# tie goes to the intent listed first, so "Why do I have to pay more than last month?" is a bill change
+# (why + more than last + last month) rather than a payment (pay).
+INTENTS: list[tuple[str, dict[str, int]]] = [
+    ("outage", {"outage": 3, "power cut": 3, "no power": 3, "no electricity": 3, "no supply": 3, "restor": 2,
+                "blackout": 3}),
+    ("payment", {"pay": 1, "pay my": 2, "due": 2, "outstanding": 2, "late fee": 3, "late payment": 3,
+                 "surcharge": 2, "overdue": 3, "receipt": 3}),
+    ("bill_change", {"why": 1, "increase": 2, "higher": 1, r"high\b": 1, "rise": 2, "rose": 2, "jump": 2,
+                     "spike": 1, "more than last": 3, "last month": 2, "lower than": 2, "compare": 2, "change": 1,
+                     "went up": 2, "doubled": 2}),
+    ("forecast", {"forecast": 3, "next bill": 2, "next month": 2, "predict": 3, "estimate": 2, "projected": 3,
+                  "projection": 3, "end of (the )?month": 2, "this month": 1, r"will\b": 1}),
+    ("save", {"save": 3, "saving": 3, "reduce": 3, "lower": 1, "lower my": 3, "cut my": 3, "tip": 2, "cheaper": 2,
+              "peak": 2, "time of day": 3, r"tod\b": 3, "shift": 2}),
+    ("solar", {"solar": 3, "net meter": 3, "export": 2, "rooftop": 3, "prosumer": 3}),
+    ("slab", {"slab": 3, "tier": 2, "telescopic": 3, "rate per unit": 3, "per kwh": 2}),
+    ("anomaly", {"anomal": 3, "tamper": 3, "unusual": 2, "meter fault": 3, "faulty meter": 3, "strange": 2}),
+    ("complaint", {"complaint": 3, "ticket": 3, "support": 2, "issue": 1}),
+    ("explain_bill", {"bill": 1, "explain": 1, "charge": 1, "invoice": 2, "breakdown": 2, "fixed charge": 3,
+                      "duty": 2, r"fac\b": 2, r"gst\b": 2}),
 ]
+_PATTERNS = [(intent, [(re.compile(rf"\b{keyword}"), weight) for keyword, weight in keywords.items()])
+             for intent, keywords in INTENTS]
+SMALL_TALK = {"hi", "hello", "hey", "namaste", "thanks", "thank you", "thank you so much", "thanks a lot", "ok",
+              "okay", "great", "cool", "bye", "goodbye", "good morning", "good afternoon", "good evening"}
 SUGGESTIONS = {
     "bill_change": ["How can I lower my next bill?", "What will this month's bill be?", "Explain my slabs"],
     "forecast": ["Why did my last bill change?", "How do I avoid the next slab?", "Show ways to save"],
@@ -90,12 +106,34 @@ def moment(value: Any, missing: str = "being assessed") -> str:
     return f"{local.day} {MONTHS[local.month - 1][:3]}, {hour}:{local.minute:02d} {meridiem} IST"
 
 
+def _plain(message: str) -> str:
+    """Lower case with hyphens, underscores and slashes as spaces, so 'time-of-day' matches 'time of day'."""
+    return " ".join(re.sub(r"[-_/]", " ", message.lower()).split())
+
+
 def classify(message: str) -> str:
-    text = message.lower()
-    for intent, keywords in INTENTS:
-        if any(keyword in text for keyword in keywords):
-            return intent
-    return "overview"
+    text = _plain(message)
+    scores = {intent: sum(weight for pattern, weight in patterns if pattern.search(text))
+              for intent, patterns in _PATTERNS}
+    best = max(scores, key=lambda intent: scores[intent])  # max keeps the first of equal scores
+    return best if scores[best] else "overview"
+
+
+def resolve_intent(message: str, history: Sequence[Mapping[str, Any]] = ()) -> tuple[str, str]:
+    """Returns the intent and the message that sets the topic.
+
+    A follow-up with no topic of its own ("and the month before?") takes the intent of the latest earlier user
+    turn that had one. Greetings and thanks stay a plain overview.
+    """
+    intent = classify(message)
+    if intent != "overview" or " ".join(re.sub(r"[^\w\s]", " ", _plain(message)).split()) in SMALL_TALK:
+        return intent, message
+    for turn in reversed(history):
+        if turn.get("role") == "user":
+            earlier = classify(str(turn.get("content", "")))
+            if earlier != "overview":
+                return earlier, str(turn["content"])
+    return intent, message
 
 
 @dataclass
@@ -154,7 +192,8 @@ def bill_change(context: dict[str, Any], answer: Answer) -> None:
                         f"({'+' if delta_kwh >= 0 else '-'}{kwh(abs(delta_kwh))}).")
     now, before = _categories(latest), _categories(previous)
     labels = {"SLAB": "Energy (slab) charges", "TOD": "Time-of-day adjustment", "FIXED": "Fixed charge",
-              "FAC": "Fuel adjustment charge", "DUTY": "Electricity duty", "SOLAR_CREDIT": "Solar credit"}
+              "FAC": "Fuel adjustment charge", "DUTY": "Electricity duty", "GST": "GST",
+              "SOLAR_CREDIT": "Solar credit"}
     for category, label in labels.items():
         if category in now or category in before:
             a, b = before.get(category, 0.0), now.get(category, 0.0)
@@ -190,6 +229,17 @@ def explain_bill(context: dict[str, Any], answer: Answer) -> None:
         answer.lines.append(f"- {line['description']}{units}: {inr(line['amount'])}")
 
 
+def _slab_eta(days: Any) -> str | None:
+    """'today', 'in about 1 day' or 'in about N days'; None when the Core API sent 'none' or nothing."""
+    try:
+        count = int(float(days))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if count <= 0:
+        return "today"
+    return f"in about {count} day{'' if count == 1 else 's'}"
+
+
 def forecast(context: dict[str, Any], answer: Answer) -> None:
     data = context.get("forecast")
     if not data:
@@ -199,9 +249,10 @@ def forecast(context: dict[str, Any], answer: Answer) -> None:
     answer.lines.append(f"For **{period(data['cycle'])}**, you have used {kwh(data['importKwhToDate'])} so far. The "
                         f"projected bill is **{inr(bill['p50'])}** (likely range {inr(bill['p10'])} to "
                         f"{inr(bill['p90'])}) for about {kwh(energy['p50'])}.")
-    if data.get("daysToNextSlab") not in (None, "none"):
+    when = _slab_eta(data.get("daysToNextSlab"))
+    if when and data.get("nextSlabAtKwh") not in (None, "none"):
         answer.lines.append(f"- At the current pace you will enter the next slab at {kwh(data['nextSlabAtKwh'])} "
-                            f"in about {data['daysToNextSlab']} days.")
+                            f"{when}.")
     budget = context.get("account", {}).get("monthlyBudgetInr")
     if isinstance(budget, (int, float)) and budget:
         status = "above" if float(bill["p50"]) > float(budget) else "within"
@@ -331,11 +382,14 @@ HANDLERS = {"bill_change": bill_change, "explain_bill": explain_bill, "forecast"
             "anomaly": anomaly, "overview": overview}
 
 
-def respond(message: str, context: dict[str, Any], rag: RagStore) -> Answer:
-    intent = classify(message)
+def respond(message: str, context: dict[str, Any], rag: RagStore,
+            history: Sequence[Mapping[str, Any]] = ()) -> Answer:
+    intent, topic = resolve_intent(message, history)
     answer = Answer(intent)
     HANDLERS[intent](context, answer)
-    for passage, _ in rag.search(message, limit=1):
+    # A follow-up inherits its topic, so the knowledge base is searched with the question that set it too.
+    query = message if topic == message else f"{topic} {message}"
+    for passage, _ in rag.search(query, limit=1):
         sentences = re.split(r"(?<=\.)\s+", passage.text)
         answer.lines.append("")
         answer.lines.append(f"> **{passage.title}:** {' '.join(sentences[:2])}")
@@ -345,6 +399,34 @@ def respond(message: str, context: dict[str, Any], rag: RagStore) -> Answer:
 
 def suggestions(intent: str) -> list[str]:
     return SUGGESTIONS.get(intent, SUGGESTIONS["overview"])
+
+
+def _period_key(value: Any) -> str:
+    """A billing period as 'YYYY-MM', also when it arrives as a [year, month] pair."""
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return f"{int(value[0]):04d}-{int(value[1]):02d}"
+    return str(value or "")
+
+
+def _linked_bill(linked: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Normalises the Core API's linkedBill ({"bill": header, "lineItems": [...]}) to the context bill shape."""
+    if not linked:
+        return None
+    header = linked.get("bill") if isinstance(linked.get("bill"), dict) else linked
+    total = header.get("totalInr", header.get("totalAmount"))
+    if header.get("importKwh") is None or total is None or not header.get("period"):
+        return None
+    return {**header, "period": _period_key(header["period"]), "totalInr": total,
+            "exportKwh": header.get("exportKwh", 0),
+            "lineItems": linked.get("lineItems", header.get("lineItems", []))}
+
+
+def _billing_pair(bills: list[dict[str, Any]], disputed: dict[str, Any] | None):
+    """The disputed bill and the bill just before it in period order, or the latest two bills without one."""
+    if disputed is None:
+        return (bills[0], bills[1]) if len(bills) >= 2 else (None, None)
+    earlier = [bill for bill in bills if _period_key(bill.get("period")) < disputed["period"]]
+    return disputed, max(earlier, key=lambda bill: _period_key(bill.get("period")), default=None)
 
 
 def triage(complaint_data: dict[str, Any], context: dict[str, Any], linked: dict[str, Any] | None) -> dict[str, Any]:
@@ -358,26 +440,38 @@ def triage(complaint_data: dict[str, Any], context: dict[str, Any], linked: dict
     cause = "Insufficient data to determine a cause automatically."
     response = "Thank you for contacting us. We are reviewing your request and will update you shortly."
 
-    if kind == "BILLING" and len(bills) >= 2:
-        latest, previous = bills[0], bills[1]
-        delta = float(latest["importKwh"]) - float(previous["importKwh"])
-        pct = delta / float(previous["importKwh"]) * 100 if float(previous["importKwh"]) else 0
-        evidence.append(f"{period(latest['period'])}: {kwh(latest['importKwh'])}, {inr(latest['totalInr'])}; "
-                        f"{period(previous['period'])}: {kwh(previous['importKwh'])}, {inr(previous['totalInr'])}.")
-        if _slab_count(latest) > _slab_count(previous):
-            evidence.append(f"Usage reached slab {_slab_count(latest)} (slab {_slab_count(previous)} before).")
-        if pct >= 10:
-            cause = f"Consumption rose {pct:.1f}%, which explains the higher bill; tariff charges were applied " \
-                    "correctly."
-            response = (f"We reviewed your {period(latest['period'])} bill. Your meter recorded "
-                        f"{kwh(latest['importKwh'])} "
-                        f"compared with {kwh(previous['importKwh'])} the month before, so more units were charged"
-                        + (f", including units in slab {_slab_count(latest)}" if _slab_count(latest) >
-                           _slab_count(previous) else "") + ". The bill is correct. Shifting evening usage to "
-                        "daytime solar hours can lower future bills.")
-        else:
-            cause = "Consumption is broadly stable; review line items and any adjustments for the difference."
-        checks += ["Compare the line items of the last two invoices.", "Confirm no VEE-flagged hours were billed."]
+    disputed = _linked_bill(linked)
+    if kind == "BILLING":
+        latest, previous = _billing_pair(bills, disputed)
+        if latest is not None and previous is not None:
+            delta = float(latest["importKwh"]) - float(previous["importKwh"])
+            pct = delta / float(previous["importKwh"]) * 100 if float(previous["importKwh"]) else 0
+            evidence.append(f"{period(latest['period'])}: {kwh(latest['importKwh'])}, {inr(latest['totalInr'])}; "
+                            f"{period(previous['period'])}: {kwh(previous['importKwh'])}, "
+                            f"{inr(previous['totalInr'])}.")
+            if _slab_count(latest) > _slab_count(previous):
+                evidence.append(f"Usage reached slab {_slab_count(latest)} (slab {_slab_count(previous)} before).")
+            if pct >= 10:
+                cause = f"Consumption rose {pct:.1f}%, which explains the higher bill; tariff charges were " \
+                        "applied correctly."
+                response = (f"We reviewed your {period(latest['period'])} bill. Your meter recorded "
+                            f"{kwh(latest['importKwh'])} compared with {kwh(previous['importKwh'])} in "
+                            f"{period(previous['period'])}, so more units were charged"
+                            + (f", including units in slab {_slab_count(latest)}" if _slab_count(latest) >
+                               _slab_count(previous) else "") + ". The bill is correct. Shifting evening usage to "
+                            "daytime solar hours can lower future bills.")
+            else:
+                cause = "Consumption is broadly stable; review line items and any adjustments for the difference."
+            checks += [f"Compare the line items of {latest.get('billNumber', 'the disputed bill')} with "
+                       f"{previous.get('billNumber', 'the bill before it')}.",
+                       "Confirm no VEE-flagged hours were billed."]
+        elif latest is not None:
+            evidence.append(f"{period(latest['period'])}: {kwh(latest['importKwh'])}, {inr(latest['totalInr'])} "
+                            f"({latest.get('billNumber', 'disputed bill')}).")
+            cause = (f"No earlier bill is available to compare with {latest.get('billNumber', 'the disputed bill')}; "
+                     "review its line items and meter readings.")
+            checks += [f"Review the line items of {latest.get('billNumber', 'the disputed bill')}.",
+                       "Confirm no VEE-flagged hours were billed."]
     elif kind == "POWER_OUTAGE":
         priority = "CRITICAL"
         if outages:
@@ -396,7 +490,7 @@ def triage(complaint_data: dict[str, Any], context: dict[str, Any], linked: dict
                                                                      "POWER_FACTOR_DROP", "TAMPER_SUSPECTED")]
         for item in related:
             evidence.append(f"{item['anomalyType'].replace('_', ' ').title()} anomaly ({item['severity'].lower()}) "
-                            f"from {item['windowStart']}.")
+                            f"from {moment(item.get('windowStart'), 'an unrecorded time')}.")
         cause = ("Meter data shows matching anomalies; a field inspection is needed." if related
                  else "No matching anomaly in recent telemetry; inspect the installation on site.")
         checks.append("Schedule a field visit and record a check-meter reading.")
@@ -407,8 +501,8 @@ def triage(complaint_data: dict[str, Any], context: dict[str, Any], linked: dict
         else:
             response = ("We have scheduled a field engineer to inspect your meter. Your supply is not affected, and "
                         "no bill is issued from readings that fail our checks until the meter is verified.")
-    elif kind == "SOLAR_NET_METERING" and bills:
-        latest = bills[0]
+    elif kind == "SOLAR_NET_METERING" and (disputed or bills):
+        latest = disputed or bills[0]
         evidence.append(f"{period(latest['period'])}: imported {kwh(latest['importKwh'])}, exported "
                         f"{kwh(latest['exportKwh'])}.")
         cause = "Exports are netted against imports; surplus is carried forward as kWh credit per tariff policy."

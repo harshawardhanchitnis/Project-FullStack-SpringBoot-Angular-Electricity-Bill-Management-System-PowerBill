@@ -1,21 +1,31 @@
 import { HttpClient } from '@angular/common/http';
-import { Component, ElementRef, Injectable, inject, input, output, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, Injectable, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { LucideSend, LucideSparkles } from '@lucide/angular';
+import { LucideEraser, LucideSend, LucideSparkles } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { CustomerStore } from '../core/customer';
 import { CopilotAnswer } from '../core/models';
 import { problemMessage } from '../core/ui-state';
 import { Dialog } from '../shared/ui';
 
+const DEFAULT_SUGGESTIONS = ['Why did my bill change?', 'What will this month cost?', 'How can I save at peak time?'];
+
 /** Lets any customer page open the Copilot drawer. */
 @Injectable({ providedIn: 'root' })
 export class CopilotState {
   readonly open = signal(false);
+  /** A question to ask as soon as the drawer opens, for example from the command palette. */
+  readonly pending = signal<string | null>(null);
+
+  ask(question: string): void {
+    this.pending.set(question);
+    this.open.set(true);
+  }
 }
 
 interface Turn {
-  role: 'user' | 'assistant';
+  /** `divider` marks a meter switch; it is shown in the transcript but never sent as history. */
+  role: 'user' | 'assistant' | 'divider';
   content: string;
   html?: string;
   meta?: CopilotAnswer;
@@ -48,12 +58,18 @@ export function renderMarkdown(text: string): string {
 
 @Component({
   selector: 'app-copilot',
-  imports: [Dialog, FormsModule, LucideSend, LucideSparkles],
+  imports: [Dialog, FormsModule, LucideEraser, LucideSend, LucideSparkles],
   template: `
     <app-dialog [open]="open()" [drawer]="true" heading="Energy Copilot"
                 subheading="Answers use your own bills, tariff and meter data." (closed)="closed.emit()">
       <div class="flex min-h-full flex-col gap-4" aria-live="polite">
-        @if (!turns().length) {
+        @if (turns().length) {
+          <div class="flex justify-end">
+            <button type="button" class="btn-ghost btn-sm" [disabled]="busy()" (click)="clearChat()">
+              <svg lucideEraser [size]="14" aria-hidden="true"></svg> Clear chat
+            </button>
+          </div>
+        } @else {
           <div class="rounded-xl bg-brand-soft p-4 text-sm text-ink">
             <p class="flex items-center gap-2 font-semibold text-brand-strong">
               <svg lucideSparkles [size]="16" aria-hidden="true"></svg> Ask about your electricity
@@ -62,7 +78,11 @@ export function renderMarkdown(text: string): string {
           </div>
         }
         @for (turn of turns(); track $index) {
-          @if (turn.role === 'user') {
+          @if (turn.role === 'divider') {
+            <p class="flex items-center gap-3 text-xs text-faint" role="separator">
+              <span class="h-px flex-1 bg-line"></span>{{ turn.content }}<span class="h-px flex-1 bg-line"></span>
+            </p>
+          } @else if (turn.role === 'user') {
             <p class="ml-auto max-w-[85%] rounded-2xl rounded-br-sm bg-brand px-4 py-2.5 text-sm text-on-brand">
               {{ turn.content }}
             </p>
@@ -72,7 +92,9 @@ export function renderMarkdown(text: string): string {
               @if (turn.meta?.citations?.length) {
                 <p class="mt-2 text-xs text-faint">Source: {{ citations(turn.meta!) }}</p>
               }
-              <p class="mt-1 text-[11px] text-faint">Answered by {{ turn.meta?.providerUsed }}</p>
+              @if (turn.meta?.providerUsed) {
+                <p class="mt-1 text-[11px] text-faint">Answered by {{ turn.meta!.providerUsed }}</p>
+              }
             </div>
           }
         }
@@ -81,7 +103,7 @@ export function renderMarkdown(text: string): string {
         }
         <div #end></div>
       </div>
-      <div dialog-footer class="border-t border-line p-4">
+      <div dialog-footer class="empty:hidden border-t border-line p-4">
         <div class="mb-3 flex flex-wrap gap-2">
           @for (suggestion of suggestions(); track suggestion) {
             <button type="button" class="btn-secondary btn-sm" [disabled]="busy()" (click)="ask(suggestion)">
@@ -106,13 +128,41 @@ export class CopilotDrawer {
   readonly closed = output<void>();
   private readonly http = inject(HttpClient);
   private readonly customer = inject(CustomerStore);
+  private readonly state = inject(CopilotState);
   private readonly end = viewChild<ElementRef<HTMLElement>>('end');
   protected readonly turns = signal<Turn[]>([]);
   protected readonly busy = signal(false);
-  protected readonly suggestions = signal([
-    'Why did my bill change?', 'What will this month cost?', 'How can I save at peak time?',
-  ]);
+  protected readonly suggestions = signal(DEFAULT_SUGGESTIONS);
   protected draft = '';
+  private meterId: string | null | undefined;
+
+  constructor() {
+    effect(() => {
+      const question = this.state.pending();
+      if (question && this.open()) {
+        untracked(() => {
+          this.state.pending.set(null);
+          void this.ask(question);
+        });
+      }
+    });
+    // Answers are about one meter; mark the transcript when the customer switches meters in the top bar.
+    effect(() => {
+      const meter = this.customer.meter();
+      untracked(() => {
+        const id = meter?.id ?? null;
+        if (this.meterId !== undefined && id !== this.meterId && this.turns().length && meter) {
+          this.turns.update((turns) => [...turns, { role: 'divider', content: `Now answering for ${meter.meterSerial}` }]);
+        }
+        this.meterId = id;
+      });
+    });
+  }
+
+  protected clearChat(): void {
+    this.turns.set([]);
+    this.suggestions.set(DEFAULT_SUGGESTIONS);
+  }
 
   protected citations(meta: CopilotAnswer): string {
     return meta.citations.map((citation) => citation.title).join(', ');
@@ -122,7 +172,12 @@ export class CopilotDrawer {
     const message = text.trim();
     if (!message || this.busy()) return;
     this.draft = '';
-    const history = this.turns().map((turn) => ({ role: turn.role, content: turn.content }));
+    // History restarts at the last meter switch, so earlier answers about another meter are not re-sent.
+    const turns = this.turns();
+    const since = turns.map((turn) => turn.role).lastIndexOf('divider') + 1;
+    const history = turns.slice(since)
+      .filter((turn) => turn.role === 'user' || (turn.role === 'assistant' && turn.meta !== undefined))
+      .map((turn) => ({ role: turn.role, content: turn.content }));
     this.turns.update((turns) => [...turns, { role: 'user', content: message }]);
     this.busy.set(true);
     this.scroll();

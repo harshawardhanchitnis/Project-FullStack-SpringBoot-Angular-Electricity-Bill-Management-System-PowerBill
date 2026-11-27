@@ -25,6 +25,13 @@ function ist(date: Date): string {
   return `${date.toISOString().slice(0, 10)}T00:00:00+05:30`;
 }
 
+/** The IST day window for a usage range: the last 7 or 30 days, or the current month plus the 11 before it. */
+export function rangeBounds(range: Range): { from: Date; to: Date } {
+  const from = range === 'week' ? istDate(-6) : range === 'month' ? istDate(-29) : istDate(0, true);
+  if (range === 'year') from.setUTCMonth(from.getUTCMonth() - 11);
+  return { from, to: istDate(1) };
+}
+
 function completedMonths(count: number): string[] {
   const now = istDate(0, true);
   return Array.from({ length: count }, (_, index) => {
@@ -63,7 +70,7 @@ function completedMonths(count: number): string[] {
 
     <section class="card-pad mt-4" aria-labelledby="heatmap-heading">
       <h2 id="heatmap-heading" class="h-section">Hour-by-day load map · last 14 days</h2>
-      <p class="text-xs text-faint">Cells shift from teal to pink as usage rises. Evening peak runs 18:00–22:00; solar hours 09:00–17:00.</p>
+      <p class="text-xs text-faint">Cells run from slate (little use) through cyan and blue to red (most use). Evening peak runs 18:00–22:00; solar hours 09:00–17:00.</p>
       <app-chart class="mt-3" [options]="heatmapChart()" [height]="320" label="Heatmap of hourly energy use for the last 14 days" />
     </section>
 
@@ -165,8 +172,8 @@ export class Energy {
     const sim = this.simulation();
     return (c: ChartPalette) => {
       if (!sim) return {};
-      const categories = ['SLAB', 'TOD', 'FIXED', 'FAC', 'DUTY', 'SOLAR_CREDIT'];
-      const labels: Record<string, string> = { SLAB: 'Energy', TOD: 'Time of day', FIXED: 'Fixed', FAC: 'FAC', DUTY: 'Duty', SOLAR_CREDIT: 'Solar credit' };
+      const categories = ['SLAB', 'TOD', 'FIXED', 'FAC', 'DUTY', 'GST', 'SOLAR_CREDIT'];
+      const labels: Record<string, string> = { SLAB: 'Energy', TOD: 'Time of day', FIXED: 'Fixed', FAC: 'FAC', DUTY: 'Duty', GST: 'GST', SOLAR_CREDIT: 'Solar credit' };
       const total = (quote: Simulation['baseline'], category: string) =>
         quote.lineItems.filter((line) => line.category === category).reduce((sum, line) => sum + line.amountInr, 0);
       const used = categories.filter((category) => total(sim.baseline, category) !== 0 || total(sim.projected, category) !== 0);
@@ -201,11 +208,9 @@ export class Energy {
     if (!meter) return;
     this.error.set(null);
     const range = this.range();
-    const to = istDate(range === 'year' ? 0 : 1, range === 'year');
-    const from = range === 'week' ? istDate(-6) : range === 'month' ? istDate(-29) : istDate(0, true);
-    if (range === 'year') from.setUTCMonth(from.getUTCMonth() - 11);
+    const { from, to } = rangeBounds(range);
     const granularity = range === 'year' ? 'monthly' : 'daily';
-    const url = `/api/v1/meters/${meter.id}/readings?from=${encodeURIComponent(ist(from))}&to=${encodeURIComponent(ist(range === 'year' ? istDate(1) : to))}&granularity=${granularity}`;
+    const url = `/api/v1/meters/${meter.id}/readings?from=${encodeURIComponent(ist(from))}&to=${encodeURIComponent(ist(to))}&granularity=${granularity}`;
     try {
       const rows = await firstValueFrom(this.http.get<{ bucket: string; importKwh: number; exportKwh: number }[]>(url));
       this.points.set(rows.map((row) => ({
@@ -255,12 +260,16 @@ export class Energy {
     }
   }
 
+  /** Exports the same period the usage chart shows (7 days, 30 days or 12 months). */
   protected async export(kind: 'csv' | 'green-button'): Promise<void> {
     const meter = this.customer.meter();
     if (!meter) return;
-    const from = encodeURIComponent(ist(istDate(-29)));
-    const to = encodeURIComponent(ist(istDate(1)));
+    const range = this.range();
+    const bounds = rangeBounds(range);
+    const from = encodeURIComponent(ist(bounds.from));
+    const to = encodeURIComponent(ist(bounds.to));
+    const span = { week: '7-days', month: '30-days', year: '12-months' }[range];
     await download(this.http, `/api/v1/meters/${meter.id}/export/${kind}?from=${from}&to=${to}`,
-      `${meter.meterSerial}-usage.${kind === 'csv' ? 'csv' : 'xml'}`).catch((error) => this.toasts.error(error));
+      `${meter.meterSerial}-usage-${span}.${kind === 'csv' ? 'csv' : 'xml'}`).catch((error) => this.toasts.error(error));
   }
 }

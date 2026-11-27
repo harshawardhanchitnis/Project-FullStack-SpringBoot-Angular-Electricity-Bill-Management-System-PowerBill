@@ -3,6 +3,7 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { NonNullableFormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import { LucideEye, LucideEyeOff } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { AuthStore } from '../../core/auth';
 import { Toasts, problemMessage } from '../../core/ui-state';
@@ -25,7 +26,7 @@ export function passwordStrength(value: string): { score: number; label: string 
 }
 
 @Component({
-  imports: [ReactiveFormsModule, RouterLink],
+  imports: [ReactiveFormsModule, RouterLink, LucideEye, LucideEyeOff],
   template: `
     <h1 class="h-page">Create your account</h1>
     <p class="mt-1 text-sm text-muted">Register your home connection. We create your consumer account and meter.</p>
@@ -50,8 +51,15 @@ export function passwordStrength(value: string): { score: number; label: string 
         </div>
         <div class="sm:col-span-2">
           <label class="label" for="reg-password">Password</label>
-          <input id="reg-password" class="input" type="password" formControlName="password" autocomplete="new-password"
-                 aria-describedby="strength" [attr.aria-invalid]="invalid('password')" />
+          <div class="relative">
+            <input id="reg-password" class="input pr-11" [type]="reveal() ? 'text' : 'password'" formControlName="password" autocomplete="new-password"
+                   aria-describedby="strength" [attr.aria-invalid]="invalid('password')" />
+            <button type="button" class="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-faint hover:text-ink"
+                    [attr.aria-label]="reveal() ? 'Hide password' : 'Show password'" (click)="reveal.set(!reveal())">
+              @if (reveal()) { <svg lucideEyeOff [size]="17" aria-hidden="true"></svg> }
+              @else { <svg lucideEye [size]="17" aria-hidden="true"></svg> }
+            </button>
+          </div>
           <div class="mt-2 flex gap-1" aria-hidden="true">
             @for (step of [1, 2, 3, 4, 5]; track step) {
               <span class="h-1.5 flex-1 rounded-full" [class]="strength().score >= step ? strengthColor() : 'bg-sunken'"></span>
@@ -64,12 +72,16 @@ export function passwordStrength(value: string): { score: number; label: string 
         <legend class="px-1 text-sm font-semibold">Service address</legend>
         <div>
           <label class="label" for="address">Address</label>
-          <input id="address" class="input" formControlName="addressLine" autocomplete="street-address" />
+          <input id="address" class="input" formControlName="addressLine" autocomplete="street-address"
+                 [attr.aria-invalid]="premiseInvalid('addressLine')" aria-describedby="address-error" />
+          @if (premiseInvalid('addressLine')) { <p id="address-error" class="field-error">Enter the service address.</p> }
         </div>
         <div class="grid gap-4 sm:grid-cols-3">
           <div>
             <label class="label" for="city">City</label>
-            <input id="city" class="input" formControlName="city" autocomplete="address-level2" />
+            <input id="city" class="input" formControlName="city" autocomplete="address-level2"
+                   [attr.aria-invalid]="premiseInvalid('city')" aria-describedby="city-error" />
+            @if (premiseInvalid('city')) { <p id="city-error" class="field-error">Enter the city.</p> }
           </div>
           <div>
             <label class="label" for="state">State</label>
@@ -98,6 +110,7 @@ export class Register {
   protected readonly states = STATES;
   protected readonly busy = signal(false);
   protected readonly error = signal<string | null>(null);
+  protected readonly reveal = signal(false);
   private submitted = false;
   protected readonly form = inject(NonNullableFormBuilder).group({
     fullName: ['', [Validators.required, Validators.maxLength(120)]],
@@ -123,7 +136,7 @@ export class Register {
     return control.invalid && (control.touched || this.submitted);
   }
 
-  protected premiseInvalid(name: 'pincode'): boolean {
+  protected premiseInvalid(name: 'addressLine' | 'city' | 'pincode'): boolean {
     const control = this.form.controls.premise.controls[name];
     return control.invalid && (control.touched || this.submitted);
   }

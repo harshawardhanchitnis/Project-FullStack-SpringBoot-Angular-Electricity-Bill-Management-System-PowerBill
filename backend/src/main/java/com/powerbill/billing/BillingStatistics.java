@@ -18,4 +18,13 @@ public interface BillingStatistics {
     record AgingBucket(String bucket, int bills, BigDecimal outstandingInr) {}
 
     record SlabBand(String band, int bills) {}
+
+    /**
+     * Billing per meter for bills of the months {@code from} to {@code to} inclusive, plus overdue principal on any
+     * open bill past its due date. Amounts exclude late fees.
+     */
+    List<MeterBilling> billingByMeter(java.time.YearMonth from, java.time.YearMonth to);
+
+    record MeterBilling(java.util.UUID meterId, BigDecimal billedKwh, BigDecimal billedInr, BigDecimal collectedInr,
+            BigDecimal overdueInr) {}
 }

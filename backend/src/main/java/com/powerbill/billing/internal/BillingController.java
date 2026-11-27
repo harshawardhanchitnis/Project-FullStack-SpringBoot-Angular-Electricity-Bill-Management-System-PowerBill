@@ -102,8 +102,10 @@ class BillingController {
         if (q.length() > 40) {
             throw bad("The search text is too long.");
         }
-        return page(store.search(accountId, null, filter(status), year, month, q.strip().toLowerCase(Locale.ROOT),
-                checkPage(page, size), size), Map.of());
+        var rows = store.search(accountId, null, filter(status), year, month, q.strip().toLowerCase(Locale.ROOT),
+                checkPage(page, size), size);
+        // One lookup for the page's meters, so staff see which meter each bill belongs to.
+        return page(rows, accounts.meterSerials(rows.content().stream().map(BillRow::meterId).distinct().toList()));
     }
 
     @GetMapping("/ops/bills/{id}")

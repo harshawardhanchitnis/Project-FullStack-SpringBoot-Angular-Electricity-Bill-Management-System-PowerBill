@@ -134,6 +134,11 @@ class ConsumerService implements MeterDirectory, AccountDirectory {
     }
 
     @Override
+    public List<Meter> searchMeters(String text, int limit) {
+        return store.searchMeters(text, limit);
+    }
+
+    @Override
     public java.util.Optional<AccountDirectory.Account> accountForUser(UUID userId) {
         return store.forUser(userId).map(ConsumerService::view);
     }
@@ -159,6 +164,11 @@ class ConsumerService implements MeterDirectory, AccountDirectory {
     }
 
     @Override
+    public java.util.Map<UUID, String> meterSerials(java.util.Collection<UUID> meterIds) {
+        return store.meterSerials(meterIds);
+    }
+
+    @Override
     public List<UUID> usersInPincodes(java.util.Collection<String> pincodes) {
         return store.usersInPincodes(pincodes);
     }
@@ -169,10 +179,23 @@ class ConsumerService implements MeterDirectory, AccountDirectory {
     }
 
     @Transactional
-    ConsumerStore.Account autoPay(ConsumerStore.Account account, boolean enabled, Actor actor, RequestContext request) {
-        store.autoPay(account.id(), enabled);
-        audit("AUTO_PAY_CHANGED", "CONSUMER", account.id(), actor, request, Map.of("enabled", enabled));
+    ConsumerStore.Account autoPay(ConsumerStore.Account account, ConsumerRequests.AutoPay input, Actor actor,
+            RequestContext request) {
+        if (!store.autoPay(account.id(), input.enabled(), input.version())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "The account changed. Reload it and try again.");
+        }
+        audit("AUTO_PAY_CHANGED", "CONSUMER", account.id(), actor, request, Map.of("enabled", input.enabled()));
         return account(account.id());
+    }
+
+    @Override
+    public boolean autoPayEnabled(UUID accountId) {
+        return store.autoPayEnabled(accountId);
+    }
+
+    @Override
+    public List<UUID> autoPayAccounts() {
+        return store.autoPayAccounts();
     }
 
     private static AccountDirectory.Account view(ConsumerStore.Account account) {

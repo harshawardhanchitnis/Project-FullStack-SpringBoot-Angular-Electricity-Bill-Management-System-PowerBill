@@ -14,9 +14,11 @@ class IdentityStore {
             failed_login_attempts, locked_until, session_version, theme_preference, budget_alerts
             """;
     private final JdbcClient db;
+    private final AuthStateCache states;
 
-    IdentityStore(JdbcClient db) {
+    IdentityStore(JdbcClient db, AuthStateCache states) {
         this.db = db;
+        this.states = states;
     }
 
     Optional<User> byEmail(String email, boolean lock) {
@@ -108,6 +110,8 @@ class IdentityStore {
                 """).params(hash, id).update();
         db.sql("UPDATE refresh_tokens SET revoked_at=now() WHERE user_id=? AND revoked_at IS NULL")
                 .param(id).update();
+        // The session version changed, so cached auth state must not keep old access tokens alive.
+        states.evictUser(id);
         db.sql("UPDATE password_reset_tokens SET used_at=now() WHERE user_id=? AND used_at IS NULL")
                 .param(id).update();
     }

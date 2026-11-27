@@ -1,6 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Component, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { LucideHeadset, LucideIndianRupee, LucideLandmark, LucideWallet } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { problemMessage } from '../../core/ui-state';
 import { ChartPalette, EChart, axisStyle, tooltipStyle } from '../../shared/echart';
@@ -21,10 +22,26 @@ interface ExecutiveData {
     averageResolutionHours: number; averageCsat: number; openByPriority: { priority: string; count: number }[] };
   consumers: number;
   meters: number;
+  regions: Region[];
+}
+
+/** Last three billed months for one region; the loss proxy is metered minus billed energy over metered energy. */
+interface Region {
+  regionZone: string;
+  city: string;
+  meters: number;
+  meteredKwh: number;
+  billedKwh: number;
+  lossProxyPct: number | null;
+  billedInr: number;
+  collectedInr: number;
+  collectionEfficiencyPct: number | null;
+  overdueInr: number;
+  openAnomalies: number;
 }
 
 @Component({
-  imports: [EChart, KpiCard, ErrorBanner, RouterLink, ...FORMAT_PIPES],
+  imports: [EChart, KpiCard, ErrorBanner, RouterLink, ...FORMAT_PIPES, LucideIndianRupee, LucideWallet, LucideLandmark, LucideHeadset],
   template: `
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
@@ -37,14 +54,18 @@ interface ExecutiveData {
     @if (error()) { <div class="mt-5"><app-error [message]="error()!" (retry)="load()" /></div> }
 
     <section class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Key figures">
-      <app-kpi label="Billed · last 12 months" [loading]="!data()" [value]="(data()?.billedLast12Inr ?? null) | inr: true" />
+      <app-kpi label="Billed · last 12 months" [loading]="!data()" [value]="(data()?.billedLast12Inr ?? null) | inr: true">
+        <svg kpi-icon lucideIndianRupee [size]="16" aria-hidden="true"></svg></app-kpi>
       <app-kpi label="Collected · last 12 months" [loading]="!data()" [value]="(data()?.collectedLast12Inr ?? null) | inr: true" tone="ok"
-               [hint]="'Collection efficiency ' + (data()?.collectionEfficiencyPct ?? '—') + '%'" />
+               [hint]="'Collection efficiency ' + (data()?.collectionEfficiencyPct ?? '—') + '%'">
+        <svg kpi-icon lucideWallet [size]="16" aria-hidden="true"></svg></app-kpi>
       <app-kpi label="Outstanding receivables" [loading]="!data()" [value]="(data()?.outstandingInr ?? null) | inr: true"
-               [hint]="overdueHint()" [tone]="overdueAmount() > 0 ? 'warn' : 'muted'" />
+               [hint]="overdueHint()" [tone]="overdueAmount() > 0 ? 'warn' : 'muted'">
+        <svg kpi-icon lucideLandmark [size]="16" aria-hidden="true"></svg></app-kpi>
       <app-kpi label="Complaint SLA compliance" [loading]="!data()" [value]="(data()?.sla?.compliancePct ?? '—') + '%'"
                [hint]="(data()?.sla?.breachedOpen ?? 0) + ' open tickets breached · CSAT ' + (data()?.sla?.averageCsat ?? '—')"
-               [tone]="(data()?.sla?.breachedOpen ?? 0) > 0 ? 'bad' : 'ok'" />
+               [tone]="(data()?.sla?.breachedOpen ?? 0) > 0 ? 'bad' : 'ok'">
+        <svg kpi-icon lucideHeadset [size]="16" aria-hidden="true"></svg></app-kpi>
     </section>
 
     @if (data()) {
@@ -91,6 +112,44 @@ interface ExecutiveData {
             }
           </div>
         </section>
+      </div>
+
+      <section class="card mt-4 overflow-hidden" aria-labelledby="regions-heading">
+        <div class="flex flex-wrap items-baseline justify-between gap-2 p-5 pb-3">
+          <h2 id="regions-heading" class="h-section">Regional performance · last 3 billed months</h2>
+          <p class="text-xs text-faint">Loss proxy = metered minus billed energy, over metered energy (an AT&amp;C indicator, not a technical-loss figure)</p>
+        </div>
+        <div class="table-wrap rounded-none border-0 border-t">
+          <table class="table">
+            <caption class="sr-only">Energy, billing and collection by region</caption>
+            <thead><tr><th>Region</th><th class="text-right">Meters</th><th class="text-right">Metered</th><th class="text-right">Billed</th>
+              <th class="text-right">Loss proxy</th><th class="text-right">Billed ₹</th><th class="text-right">Collection</th>
+              <th class="text-right">Overdue</th><th class="text-right">Open anomalies</th></tr></thead>
+            <tbody>
+              @for (region of data()!.regions; track region.regionZone) {
+                <tr>
+                  <td class="font-medium">{{ region.regionZone }}<span class="block text-xs text-faint">{{ region.city }}</span></td>
+                  <td class="num text-right">{{ region.meters }}</td>
+                  <td class="num text-right">{{ region.meteredKwh | kwh }}</td>
+                  <td class="num text-right">{{ region.billedKwh | kwh }}</td>
+                  <td class="num text-right" [class]="lossTone(region.lossProxyPct)">{{ region.lossProxyPct === null ? '—' : region.lossProxyPct + '%' }}</td>
+                  <td class="num text-right">{{ region.billedInr | inr: true }}</td>
+                  <td class="num text-right" [class]="collectionTone(region.collectionEfficiencyPct)">{{ region.collectionEfficiencyPct === null ? '—' : region.collectionEfficiencyPct + '%' }}</td>
+                  <td class="num text-right">{{ region.overdueInr | inr: true }}</td>
+                  <td class="num text-right">{{ region.openAnomalies }}</td>
+                </tr>
+              } @empty { <tr><td colspan="9" class="text-muted">No billed regions yet.</td></tr> }
+            </tbody>
+          </table>
+        </div>
+      </section>
+    } @else if (!error()) {
+      <div class="mt-4 grid gap-4 xl:grid-cols-3" aria-hidden="true">
+        <div class="skeleton h-[330px] xl:col-span-2"></div>
+        <div class="skeleton h-[330px]"></div>
+      </div>
+      <div class="mt-4 grid gap-4 lg:grid-cols-3" aria-hidden="true">
+        <div class="skeleton h-72"></div><div class="skeleton h-72"></div><div class="skeleton h-72"></div>
       </div>
     }
   `,
@@ -164,6 +223,14 @@ export class Executive {
 
   protected label(value: string): string {
     return humanize(value);
+  }
+
+  protected lossTone(pct: number | null): string {
+    return pct === null ? 'text-faint' : pct > 15 ? 'text-bad' : pct > 8 ? 'text-warn' : 'text-ok';
+  }
+
+  protected collectionTone(pct: number | null): string {
+    return pct === null ? 'text-faint' : pct < 75 ? 'text-bad' : pct < 90 ? 'text-warn' : 'text-ok';
   }
 
   async load(): Promise<void> {

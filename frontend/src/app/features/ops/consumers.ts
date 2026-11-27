@@ -1,8 +1,8 @@
 import { HttpClient } from '@angular/common/http';
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { LucidePlus, LucideSearch } from '@lucide/angular';
+import { LucideDownload, LucidePlus, LucideSearch } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { AuthStore } from '../../core/auth';
 import { Account, BillSummary, Complaint, ConsumerDetails, LedgerLine, Page } from '../../core/models';
@@ -10,6 +10,8 @@ import { Toasts, problemMessage } from '../../core/ui-state';
 import { FORMAT_PIPES } from '../../shared/format';
 import { STATES } from '../auth/register';
 import { Dialog, EmptyState, ErrorBanner, Pager, StatusBadge } from '../../shared/ui';
+import { ConfirmService } from '../../shared/confirm';
+import { exportCsv } from '../../shared/csv';
 
 function lastMonth(): { year: number; month: number } {
   const now = new Date(Date.now() + 5.5 * 3600 * 1000);
@@ -18,7 +20,8 @@ function lastMonth(): { year: number; month: number } {
 }
 
 @Component({
-  imports: [FormsModule, RouterLink, Dialog, EmptyState, ErrorBanner, Pager, StatusBadge, ...FORMAT_PIPES, LucidePlus, LucideSearch],
+  imports: [FormsModule, RouterLink, Dialog, EmptyState, ErrorBanner, Pager, StatusBadge, ...FORMAT_PIPES, LucidePlus, LucideSearch,
+    LucideDownload],
   template: `
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
@@ -43,6 +46,8 @@ function lastMonth(): { year: number; month: number } {
         <option value="">All statuses</option><option value="ACTIVE">Active</option><option value="SUSPENDED">Suspended</option><option value="DISCONNECTED">Disconnected</option>
       </select>
       <button type="submit" class="btn-secondary">Search</button>
+      <button type="button" class="btn-secondary" [disabled]="!results()?.content?.length" (click)="exportPage()">
+        <svg lucideDownload [size]="15" aria-hidden="true"></svg> Export CSV</button>
     </form>
 
     @if (error()) { <div class="mt-4"><app-error [message]="error()!" (retry)="search(page())" /></div> }
@@ -80,6 +85,30 @@ function lastMonth(): { year: number; month: number } {
               <option value="ACTIVE">Active</option><option value="SUSPENDED">Suspended</option><option value="DISCONNECTED">Disconnected</option>
             </select>
           </section>
+          <section aria-labelledby="contact-edit-heading">
+            <div class="flex items-center justify-between">
+              <h3 id="contact-edit-heading" class="h-section">Contact & budget</h3>
+              @if (!contactDraft()) {
+                <button type="button" class="btn-ghost btn-sm" (click)="editContact(d.account)">Edit</button>
+              }
+            </div>
+            @if (contactDraft(); as c) {
+              <form class="mt-2 grid gap-3 sm:grid-cols-3" (ngSubmit)="saveContact(d.account)">
+                <div class="sm:col-span-3"><label class="label" for="c-email">Billing email</label>
+                  <input id="c-email" class="input" type="email" name="billingEmail" [(ngModel)]="c.billingEmail" required /></div>
+                <div><label class="label" for="c-mobile">Mobile</label>
+                  <input id="c-mobile" class="input num" name="mobileNumber" [(ngModel)]="c.mobileNumber" pattern="[6-9][0-9]{9}" required /></div>
+                <div><label class="label" for="c-budget">Monthly budget (₹)</label>
+                  <input id="c-budget" class="input num" type="number" min="0" step="50" name="budget" [(ngModel)]="c.monthlyBudgetInr" /></div>
+                <div class="flex items-end gap-2">
+                  <button type="submit" class="btn-primary btn-sm" [disabled]="busy()">Save</button>
+                  <button type="button" class="btn-secondary btn-sm" (click)="contactDraft.set(null)">Cancel</button>
+                </div>
+              </form>
+            } @else {
+              <p class="mt-1 text-muted">Budget {{ d.account.monthlyBudgetInr === null ? 'not set' : (d.account.monthlyBudgetInr | inr) }}{{ d.account.autoPayEnabled ? ' · auto-pay on' : '' }}</p>
+            }
+          </section>
           <section>
             <h3 class="h-section mb-2">Premises & meters</h3>
             @for (premise of d.premises; track premise.id) {
@@ -93,6 +122,27 @@ function lastMonth(): { year: number; month: number } {
                       <button type="button" class="btn-secondary btn-sm ml-auto" [disabled]="busy()" (click)="generate(meter.id)">Bill {{ billMonthLabel }}</button>
                     }
                   </div>
+                }
+                @if (meterDraft()?.premiseId === premise.id) {
+                  <form class="mt-3 grid gap-3 rounded-md border border-line p-3 sm:grid-cols-2" (ngSubmit)="addMeter(d)">
+                    <div><label class="label" [for]="'m-type-' + premise.id">Connection</label>
+                      <select class="input" [id]="'m-type-' + premise.id" name="connectionType" [(ngModel)]="meterDraft()!.connectionType">
+                        <option value="DOMESTIC">Domestic</option><option value="COMMERCIAL">Commercial</option><option value="INDUSTRIAL">Industrial</option>
+                      </select></div>
+                    <div><label class="label" [for]="'m-load-' + premise.id">Sanctioned load (kW)</label>
+                      <input class="input num" type="number" min="0.5" step="0.5" [id]="'m-load-' + premise.id" name="load" [(ngModel)]="meterDraft()!.sanctionedLoadKw" required /></div>
+                    <label class="flex items-center gap-2 sm:col-span-2"><input type="checkbox" class="size-4 accent-[var(--brand)]" name="solar" [(ngModel)]="meterDraft()!.solarNetMetering" /> Rooftop solar with net metering</label>
+                    @if (meterDraft()!.solarNetMetering) {
+                      <div><label class="label" [for]="'m-solar-' + premise.id">Solar capacity (kW)</label>
+                        <input class="input num" type="number" min="0.5" step="0.5" [id]="'m-solar-' + premise.id" name="solarKw" [(ngModel)]="meterDraft()!.solarCapacityKw" required /></div>
+                    }
+                    <div class="flex items-end gap-2 sm:col-span-2">
+                      <button type="submit" class="btn-primary btn-sm" [disabled]="busy()">Add meter</button>
+                      <button type="button" class="btn-secondary btn-sm" (click)="meterDraft.set(null)">Cancel</button>
+                    </div>
+                  </form>
+                } @else {
+                  <button type="button" class="btn-ghost btn-sm mt-2" (click)="startMeter(premise.id)">Add meter</button>
                 }
               </div>
             }
@@ -150,7 +200,7 @@ function lastMonth(): { year: number; month: number } {
         <div><label class="label" for="n-pin">Pincode</label><input id="n-pin" class="input num" name="pincode" [(ngModel)]="draft.pincode" required /></div>
         @if (formError()) { <p role="alert" class="rounded-lg bg-bad-soft p-3 text-sm sm:col-span-2">{{ formError() }}</p> }
       </form>
-      <div dialog-footer class="flex justify-end gap-2 border-t border-line p-4">
+      <div dialog-footer class="empty:hidden flex justify-end gap-2 border-t border-line p-4">
         <button type="button" class="btn-secondary" (click)="createOpen.set(false)">Cancel</button>
         <button type="submit" form="create-consumer" class="btn-primary" [disabled]="busy()">Create consumer</button>
       </div>
@@ -158,8 +208,11 @@ function lastMonth(): { year: number; month: number } {
   `,
 })
 export class Consumers {
+  /** Deep link (`?account=<id>`) that opens a consumer's 360° view, used by the command palette. */
+  readonly account = input<string>();
   private readonly http = inject(HttpClient);
   private readonly toasts = inject(Toasts);
+  private readonly confirm = inject(ConfirmService);
   private readonly auth = inject(AuthStore);
   protected readonly states = STATES;
   protected readonly results = signal<Page<Account> | null>(null);
@@ -170,6 +223,9 @@ export class Consumers {
   protected readonly ledger = signal<LedgerLine[]>([]);
   protected readonly complaints = signal<Complaint[]>([]);
   protected readonly createOpen = signal(false);
+  protected readonly contactDraft = signal<{ billingEmail: string; mobileNumber: string; monthlyBudgetInr: number | null } | null>(null);
+  protected readonly meterDraft = signal<{ premiseId: string; connectionType: string; sanctionedLoadKw: number;
+    solarNetMetering: boolean; solarCapacityKw: number | null } | null>(null);
   protected readonly busy = signal(false);
   protected readonly formError = signal<string | null>(null);
   protected readonly canBill = computed(() => ['BILLING_OFFICER', 'SUPER_ADMIN'].includes(this.auth.role() ?? ''));
@@ -183,6 +239,24 @@ export class Consumers {
 
   constructor() {
     void this.search(0);
+    effect(() => {
+      const id = this.account();
+      if (id) untracked(() => void this.open(id));
+    });
+  }
+
+  protected exportPage(): void {
+    exportCsv(`gridiq-consumers-page-${this.page() + 1}.csv`, this.results()?.content ?? [], [
+      { header: 'Consumer number', value: (a) => a.consumerNumber },
+      { header: 'Name', value: (a) => a.fullName },
+      { header: 'Type', value: (a) => a.accountType },
+      { header: 'Billing email', value: (a) => a.billingEmail },
+      { header: 'Mobile', value: (a) => a.mobileNumber },
+      { header: 'Status', value: (a) => a.status },
+      { header: 'Auto-pay', value: (a) => a.autoPayEnabled },
+      { header: 'Monthly budget (INR)', value: (a) => a.monthlyBudgetInr },
+      { header: 'Since', value: (a) => a.createdAt },
+    ]);
   }
 
   async search(page: number): Promise<void> {
@@ -219,9 +293,59 @@ export class Consumers {
     }
   }
 
+  protected editContact(account: Account): void {
+    this.contactDraft.set({ billingEmail: account.billingEmail, mobileNumber: account.mobileNumber,
+      monthlyBudgetInr: account.monthlyBudgetInr });
+  }
+
+  protected async saveContact(account: Account): Promise<void> {
+    const draft = this.contactDraft();
+    if (!draft) return;
+    this.busy.set(true);
+    try {
+      await firstValueFrom(this.http.put(`/api/v1/ops/consumers/${account.id}`, { ...draft, version: account.version }));
+      this.contactDraft.set(null);
+      this.toasts.success('Contact and budget saved.');
+      await this.open(account.id);
+      void this.search(this.page());
+    } catch (error) {
+      this.toasts.error(error);
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  protected startMeter(premiseId: string): void {
+    const type = this.detail()?.account.accountType;
+    this.meterDraft.set({ premiseId, connectionType: type === 'COMMERCIAL' ? 'COMMERCIAL' : type === 'INDUSTRIAL' ? 'INDUSTRIAL' : 'DOMESTIC',
+      sanctionedLoadKw: 5, solarNetMetering: false, solarCapacityKw: null });
+  }
+
+  protected async addMeter(details: ConsumerDetails): Promise<void> {
+    const draft = this.meterDraft();
+    if (!draft) return;
+    this.busy.set(true);
+    try {
+      await firstValueFrom(this.http.post(`/api/v1/ops/consumers/${details.account.id}/meters`, {
+        ...draft, solarCapacityKw: draft.solarNetMetering ? draft.solarCapacityKw : null }));
+      this.meterDraft.set(null);
+      this.toasts.success('Meter added. The serial is assigned automatically.');
+      await this.open(details.account.id);
+    } catch (error) {
+      this.toasts.error(error);
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
   protected async changeStatus(account: Account, status: string): Promise<void> {
     if (status === account.status) return;
-    if (!confirm(`Change ${account.fullName} to ${status.toLowerCase()}? This is recorded in the audit trail.`)) {
+    const confirmed = await this.confirm.ask({
+      title: `Change account to ${status.toLowerCase()}?`,
+      message: `${account.fullName}'s account becomes ${status.toLowerCase()}. The change is recorded in the audit trail.`,
+      confirmLabel: 'Change status', tone: status === 'ACTIVE' ? 'default' : 'danger',
+    });
+    if (!confirmed) {
       this.detail.set({ ...this.detail()! });
       return;
     }

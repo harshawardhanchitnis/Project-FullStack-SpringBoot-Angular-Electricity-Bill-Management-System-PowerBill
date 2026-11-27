@@ -26,8 +26,9 @@ return `{content, page, size, totalElements}`.
 | Method and path | Who | Result |
 | --- | --- | --- |
 | `GET, PUT /consumers/me`, `GET /consumers/me/meters`, `POST /consumers/me/premises` | Customer | Own account, premises and meters. `PUT` needs the current `version` |
+| `PATCH /consumers/me/auto-pay` | Customer | `{enabled, version}`. Enrolled accounts have each issued bill paid through the gateway, and open bills at the daily 06:30 IST run |
 | `GET /consumers/me/ledger` | Customer | Receivable statement with running balance |
-| `GET, POST /ops/consumers`, `GET, PUT /ops/consumers/{id}`, `PATCH /ops/consumers/{id}/status`, `POST /ops/consumers/{id}/meters` | Billing, support, admin | Directory search (`q`, `type`, `status`), 360° details and audited changes |
+| `GET, POST /ops/consumers`, `GET, PUT /ops/consumers/{id}`, `PATCH /ops/consumers/{id}/status`, `POST /ops/consumers/{id}/meters` | Billing, support, admin | Directory search (`q`, `type`, `status`), 360° details and audited changes. `PUT` takes `{billingEmail, mobileNumber, monthlyBudgetInr, version}`; a new meter takes `{premiseId, connectionType, sanctionedLoadKw, solarNetMetering, solarCapacityKw}` and gets its serial assigned |
 | `GET /ops/consumers/{id}/ledger` | Billing, support, admin | Account statement |
 
 ## Metering
@@ -40,7 +41,9 @@ return `{content, page, size, totalElements}`.
 | `POST /meters/{id}/import/csv` (text/csv), `POST /meters/{id}/import/green-button` (Atom XML) | Billing, field, admin | Imports with duplicate detection |
 | `POST /meters/{id}/readings/estimate`, `PATCH /meters/{id}/readings` | Billing, field, admin | Estimate a missing hour from the same hour on prior days, or correct a flagged reading with a reason |
 | `GET /ops/anomalies?status`, `PATCH /ops/anomalies/{id}` | Billing, field, admin | Investigation queue with reason codes. Outcomes: `INVESTIGATING`, `CONFIRMED_FAULT`, `CONFIRMED_TAMPER`, `FALSE_POSITIVE` |
-| `POST /ops/metering/simulate` | Billing, field, admin | Regenerates simulator data for a demo meter |
+| `GET /ops/metering/meters?q` | Billing, field, admin | Up to 20 meters whose serial contains `q` (at least two characters) |
+| `GET /ops/metering/meters/{id}/intervals?from&to` | Billing, field, admin | Hourly readings with quality flags, the flagged count, and the missing hours (aligned to IST hours) in the window |
+| `POST /ops/metering/simulate` | Billing, field, admin | Fills missing hours for a demo meter with simulated readings; existing hours are kept |
 
 ## Tariffs
 
@@ -48,7 +51,7 @@ return `{content, page, size, totalElements}`.
 | --- | --- | --- |
 | `GET /tariffs` | Signed in | Plans in force today |
 | `POST /tariffs/simulate` | Customer | Replays a completed month with `loadShiftPct`, `rooftopSolarKw` and `installedCostInr`; returns both quotes, annual savings and payback |
-| `GET, POST /ops/tariffs`, `PUT /ops/tariffs/{id}`, `PATCH /ops/tariffs/{id}/activate` | Billing, admin | Draft, edit and activate effective-dated versions. Active versions cannot be edited |
+| `GET, POST /ops/tariffs`, `PUT /ops/tariffs/{id}`, `PATCH /ops/tariffs/{id}/activate` | Billing, admin | Draft, edit and activate effective-dated versions, including slabs, GST, solar policy and export rate, grace days and late-fee rate and cap. Active versions cannot be edited. A meter's own `tariff_plan_id` overrides the plan for its connection type |
 
 ## Billing
 
@@ -65,11 +68,12 @@ return `{content, page, size, totalElements}`.
 
 | Method and path | Who | Result |
 | --- | --- | --- |
-| `POST /payments/checkout` | Customer | `{billIds, paymentMethod: UPI\|CREDIT_CARD\|DEBIT_CARD\|NET_BANKING}` with an `Idempotency-Key` UUID header. Returns 201, or 200 for a replay; 409 if a bill already has an open checkout; 422 if the key was used for a different request |
+| `POST /payments/checkout` | Customer | `{billIds, paymentMethod: UPI\|CREDIT_CARD\|DEBIT_CARD\|NET_BANKING}` (`AUTO_PAY` is reserved for mandate charges) with an `Idempotency-Key` UUID header. Returns 201, or 200 for a replay; 409 if a bill already has an open checkout; 422 if the key was used for a different request |
 | `POST /payments/sandbox/{id}/confirm` | Customer | `{outcome: SUCCEEDED\|FAILED}`. The sandbox signs a gateway event and posts it to the webhook handler |
 | `POST /webhooks/payments/{provider}` | Gateway | Requires `X-GridIQ-Signature: t=<unix>,v1=<hex HMAC-SHA256 of "t.body">` within five minutes |
 | `GET /payments`, `GET /payments/{id}`, `GET /payments/{id}/receipt/pdf` | Customer | History, allocations and receipts |
 | `GET /ops/payments?status&accountId` | Billing, admin | Payment ledger |
+| `POST /ops/payments/auto-pay/run` | Billing, admin | Runs the auto-pay sweep now and returns `{settledBills}`. Each bill's idempotency key is derived from its ID, so it can never be charged twice |
 
 ## Support, outages and notifications
 
@@ -87,12 +91,12 @@ return `{content, page, size, totalElements}`.
 
 | Method and path | Who | Result |
 | --- | --- | --- |
-| `GET /analytics/consumer/overview?meterId` | Customer | Cycle usage, slab position, 12-month history, hourly profile, time-of-day split, receivables and outages |
-| `GET /ai/forecast/{meterId}` | Customer | P10/P50/P90 energy and bill for the cycle, days to the next slab, model name and `source` (`ml` or `fallback`) |
-| `POST /ai/copilot/chat` | Customer | `{message, meterId?, history?}`. 20 requests a minute per user |
-| `GET /ops/analytics/executive` | Staff | Revenue, collection efficiency, aging, slab mix, anomalies and SLA statistics |
-| `POST /ops/ai/complaints/{id}/triage` | Support, field, admin | Summary, likely cause, evidence, next steps and a suggested reply |
-| `GET /ops/audit?q` | Super admin | Audit trail filtered by action, entity or correlation ID |
+| `GET /analytics/consumer/overview?meterId` | Customer | Cycle usage, slab position, 12-month history, hourly profile, time-of-day split, receivables, outages and `peers`: the last 30 days against the median and quartiles of meters with the same connection type and load band (null when fewer than four peers) |
+| `GET /ai/forecast/{meterId}` | Customer | P10/P50/P90 energy and bill for the cycle, net days to the next slab after any solar credit, model name and `source` (`ml` or `fallback`). 30 requests a minute per user |
+| `POST /ai/copilot/chat` | Customer | `{message, meterId?, history?}`. 20 requests a minute per user, shared with triage; over the limit returns 429 with `Retry-After` |
+| `GET /ops/analytics/executive` | Staff | Revenue, collection efficiency, aging, slab mix, anomalies, SLA statistics and `regions` (metered vs billed kWh as a loss proxy, collection efficiency, overdue amount and open anomalies per region for the last three billed months) |
+| `POST /ops/ai/complaints/{id}/triage` | Support, field, admin | Summary, likely cause, evidence, next steps, a suggested priority and reply, and `providerUsed` |
+| `GET /ops/audit?q` | Super admin | Audit trail filtered by action, entity or correlation ID. Entries include `actorName`, `actorEmail` and the recorded `afterState` |
 
 ## Internal ML service
 

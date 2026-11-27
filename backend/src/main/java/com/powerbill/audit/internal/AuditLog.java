@@ -12,6 +12,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @RestController
@@ -45,20 +47,40 @@ class AuditLog {
                     org.springframework.http.HttpStatus.BAD_REQUEST, "Invalid page, size or filter.");
         }
         String filter = """
-                 WHERE (:q='' OR strpos(lower(action), :q)>0 OR strpos(lower(entity_type), :q)>0
-                    OR strpos(lower(coalesce(correlation_id,'')), :q)>0)
+                 WHERE (:q='' OR strpos(lower(l.action), :q)>0 OR strpos(lower(l.entity_type), :q)>0
+                    OR strpos(lower(coalesce(l.correlation_id,'')), :q)>0)
                 """;
         String query = q.strip().toLowerCase(java.util.Locale.ROOT).replace(' ', '_');
+        // The actor's current name and email are joined in for display; after_state is the recorded change set.
         List<AuditEntry> rows = db.sql("""
-                SELECT id, actor_user_id, actor_role, action, entity_type, entity_id, correlation_id, created_at
-                FROM audit_logs""" + filter + " ORDER BY created_at DESC, id DESC LIMIT :size OFFSET :offset")
+                SELECT l.id, l.actor_user_id, l.actor_role, l.action, l.entity_type, l.entity_id, l.correlation_id,
+                    l.created_at, l.after_state::text AS after_state, coalesce(l.actor_email, u.email) AS actor_email,
+                    u.full_name AS actor_name
+                FROM audit_logs l LEFT JOIN users u ON u.id = l.actor_user_id""" + filter
+                + " ORDER BY l.created_at DESC, l.id DESC LIMIT :size OFFSET :offset")
                 .param("q", query).param("size", size).param("offset", (long) page * size)
-                .query(AuditEntry.class).list();
-        long count = db.sql("SELECT count(*) FROM audit_logs" + filter).param("q", query).query(Long.class).single();
+                .query((row, index) -> new AuditEntry(row.getLong("id"), row.getObject("actor_user_id", UUID.class),
+                        row.getString("actor_name"), row.getString("actor_email"), row.getString("actor_role"),
+                        row.getString("action"), row.getString("entity_type"), row.getObject("entity_id", UUID.class),
+                        row.getString("correlation_id"), row.getObject("created_at", OffsetDateTime.class),
+                        state(row.getString("after_state"))))
+                .list();
+        long count = db.sql("SELECT count(*) FROM audit_logs l" + filter).param("q", query).query(Long.class).single();
         return new Page(rows, page, size, count);
     }
 
-    record AuditEntry(long id, UUID actorUserId, String actorRole, String action, String entityType,
-            UUID entityId, String correlationId, OffsetDateTime createdAt) {}
+    private JsonNode state(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return json.readTree(value);
+        } catch (JacksonException error) {
+            return null;
+        }
+    }
+
+    record AuditEntry(long id, UUID actorUserId, String actorName, String actorEmail, String actorRole, String action,
+            String entityType, UUID entityId, String correlationId, OffsetDateTime createdAt, JsonNode afterState) {}
     record Page(List<AuditEntry> content, int page, int size, long totalElements) {}
 }

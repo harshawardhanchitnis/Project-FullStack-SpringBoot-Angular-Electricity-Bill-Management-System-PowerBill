@@ -32,6 +32,9 @@ public interface BillingLedger {
 
     List<LineItem> lineItems(UUID billId);
 
+    /** Solar kWh credit carried into a billing cycle: the closing credit on the meter's previous month's bill. */
+    BigDecimal openingCredit(UUID meterId, YearMonth cycle);
+
     record LineItem(String category, String description, BigDecimal units, BigDecimal rate, BigDecimal amount) {}
 
     record Payable(UUID billId, String billNumber, String status, BigDecimal principalDue, BigDecimal lateFeeDue,

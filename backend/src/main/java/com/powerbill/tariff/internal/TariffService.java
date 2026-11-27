@@ -58,6 +58,18 @@ class TariffService implements TariffPricing {
     }
 
     @Override
+    public TariffPlan applicablePlan(UUID meterPlanId, String type, LocalDate date) {
+        if (meterPlanId != null) {
+            var override = store.find(meterPlanId).filter(plan -> plan.active() && !plan.effectiveFrom().isAfter(date)
+                    && (plan.effectiveTo() == null || plan.effectiveTo().isAfter(date)));
+            if (override.isPresent()) {
+                return override.get();
+            }
+        }
+        return applicablePlan(type, date);
+    }
+
+    @Override
     public Quote price(TariffPlan plan, BigDecimal load, boolean netMetering, BigDecimal previousCredit,
             List<Interval> intervals) {
         return calculator.price(plan, load, netMetering, previousCredit, intervals);
@@ -121,7 +133,7 @@ class TariffService implements TariffPricing {
         }
         LocalDate start = month.atDay(1);
         LocalDate end = month.plusMonths(1).atDay(1);
-        var plan = applicablePlan(meter.connectionType(), start);
+        var plan = applicablePlan(meter.tariffPlanId(), meter.connectionType(), start);
         if (plan.effectiveTo() != null && plan.effectiveTo().isBefore(end)) {
             throw conflict("This month spans more than one tariff version.");
         }

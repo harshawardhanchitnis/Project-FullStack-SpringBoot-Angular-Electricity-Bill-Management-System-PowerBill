@@ -13,4 +13,8 @@ public final class BillingEvents {
     public record BillOverdue(UUID billId, String billNumber, UUID accountId, UUID userId, LocalDate dueDate) {}
 
     public record BillSettled(UUID billId, String billNumber, UUID accountId, UUID userId, BigDecimal amountPaid) {}
+
+    /** A credit or debit note changed what is owed on a bill. */
+    public record BillAdjusted(UUID billId, String billNumber, UUID accountId, String noteNumber, String noteType,
+            BigDecimal amount) {}
 }

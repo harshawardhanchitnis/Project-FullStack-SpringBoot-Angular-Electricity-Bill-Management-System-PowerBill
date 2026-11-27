@@ -62,7 +62,9 @@ test('a customer raises a complaint linked to a bill and follows it', async ({ p
 });
 
 for (const width of [375, 768, 1440]) {
-  test(`customer pages fit a ${width}px viewport`, async ({ page }) => {
+  test(`customer pages fit a ${width}px viewport with a clean console`, async ({ page }) => {
+    // CSP violations are reported as console errors, so this also proves style-src 'self' holds on every page.
+    const errors = watchConsole(page);
     await page.setViewportSize({ width, height: 900 });
     await signIn(page, 'customer02', /\/app\/dashboard$/);
     await expect(page.getByText('Projected bill this month')).toBeVisible();
@@ -72,6 +74,7 @@ for (const width of [375, 768, 1440]) {
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
       await expectNoHorizontalScroll(page);
     }
+    expect(errors).toEqual([]);
   });
 }
 
@@ -81,7 +84,7 @@ test('a new customer registers and lands on the dashboard', async ({ page }) => 
   await page.getByLabel('Full name').fill('Priya Nair');
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Mobile number').fill('9811122233');
-  await page.getByLabel('Password').fill('A-strong-pass-2026!');
+  await page.getByLabel('Password', { exact: true }).fill('A-strong-pass-2026!');
   await page.getByLabel('Address').fill('12 Lake View Road');
   await page.getByLabel('City').fill('Pune');
   await page.getByLabel('Pincode').fill('411001');

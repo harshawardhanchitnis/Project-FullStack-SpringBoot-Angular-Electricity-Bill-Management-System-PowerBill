@@ -1,0 +1,9 @@
+# Development override: exposes the Core API directly on loopback so reviewers can browse the interactive API docs.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# Then open http://127.0.0.1:8081/swagger-ui.html (OpenAPI JSON at /v3/api-docs). The docs exist only in the dev
+# profile; Nginx still blocks them on the public port, and this port binds to 127.0.0.1 only. Do not use this file
+# for a shared or production deployment.
+services:
+  backend:
+    ports:
+      - "${COMPOSE_BIND_ADDRESS:-127.0.0.1}:${CORE_API_PORT:-8081}:8080"

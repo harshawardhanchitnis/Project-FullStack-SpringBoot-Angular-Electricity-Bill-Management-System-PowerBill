@@ -15,6 +15,9 @@ public interface AnomalyRegistry {
 
     List<Summary> forMeter(UUID meterId, int limit);
 
+    /** Open or investigating anomalies per meter. Meters without any are absent. */
+    java.util.Map<UUID, Integer> openByMeter();
+
     Statistics statistics();
 
     record Reason(String code, String detail) {}

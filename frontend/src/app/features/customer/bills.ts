@@ -1,12 +1,15 @@
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Component, computed, effect, inject, input, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { Router } from '@angular/router';
 import { LucideCheck, LucideDownload, LucideShieldCheck } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { BillDetail, BillSummary, LedgerLine, Page, Payment } from '../../core/models';
 import { NotificationStore, Toasts, problemMessage } from '../../core/ui-state';
+import { CustomerStore } from '../../core/customer';
+import { exportCsv } from '../../shared/csv';
 import { download, idempotencyKey } from '../../shared/download';
 import { FORMAT_PIPES, inr } from '../../shared/format';
+import { FormsModule } from '@angular/forms';
 import { Dialog, EmptyState, ErrorBanner, Pager, StatusBadge } from '../../shared/ui';
 
 type Tab = 'unpaid' | 'paid' | 'payments' | 'statement';
@@ -20,7 +23,7 @@ const METHODS: { value: Method; label: string }[] = [
 ];
 
 @Component({
-  imports: [Dialog, EmptyState, ErrorBanner, Pager, StatusBadge, ...FORMAT_PIPES, LucideDownload, LucideCheck,
+  imports: [FormsModule, Dialog, EmptyState, ErrorBanner, Pager, StatusBadge, ...FORMAT_PIPES, LucideDownload, LucideCheck,
     LucideShieldCheck],
   template: `
     <div class="flex flex-wrap items-end justify-between gap-3">
@@ -39,9 +42,30 @@ const METHODS: { value: Method; label: string }[] = [
 
     @if (error()) { <div class="mt-5"><app-error [message]="error()!" (retry)="reload()" /></div> }
 
+    @if (current() !== 'statement') {
+      <div class="mt-5 flex flex-wrap items-end gap-2">
+        @if (current() !== 'payments') {
+          @if (customer.meters().length > 1) {
+            <div><label class="label" for="bill-meter">Meter</label>
+              <select id="bill-meter" class="input w-auto" [ngModel]="meterFilter()" (ngModelChange)="filter({ meter: $event })">
+                <option value="">All meters</option>
+                @for (meter of customer.meters(); track meter.id) { <option [value]="meter.id">{{ meter.meterSerial }}</option> }
+              </select></div>
+          }
+          <div><label class="label" for="bill-year">Year</label>
+            <select id="bill-year" class="input w-auto" [ngModel]="yearFilter()" (ngModelChange)="filter({ year: $event })">
+              <option value="">All years</option>
+              @for (year of years; track year) { <option [value]="year">{{ year }}</option> }
+            </select></div>
+        }
+        <button type="button" class="btn-secondary btn-sm ml-auto" [disabled]="!exportable()" (click)="exportCurrent()">
+          <svg lucideDownload [size]="14" aria-hidden="true"></svg> Export CSV</button>
+      </div>
+    }
+
     @switch (current()) {
       @case ('payments') {
-        <div class="table-wrap mt-5">
+        <div class="table-wrap mt-3">
           <table class="table">
             <caption class="sr-only">Payment history</caption>
             <thead><tr><th>Reference</th><th>Date</th><th>Method</th><th class="text-right">Amount</th><th>Status</th><th><span class="sr-only">Receipt</span></th></tr></thead>
@@ -50,7 +74,7 @@ const METHODS: { value: Method; label: string }[] = [
                 <tr>
                   <td class="font-medium">{{ payment.paymentReference }}</td>
                   <td>{{ (payment.completedAt ?? payment.createdAt) | moment }}</td>
-                  <td>{{ (payment.paymentMethod ?? payment.method) | humanize }}</td>
+                  <td>{{ payment.paymentMethod | humanize }}</td>
                   <td class="text-right font-medium">{{ payment.amount | inr }}</td>
                   <td><app-badge [status]="payment.status" /></td>
                   <td class="text-right">
@@ -90,7 +114,7 @@ const METHODS: { value: Method; label: string }[] = [
         </div>
       }
       @default {
-        <div class="table-wrap mt-5">
+        <div class="table-wrap mt-3">
           <table class="table">
             <caption class="sr-only">{{ current() === 'unpaid' ? 'Unpaid bills' : 'Paid bills' }}</caption>
             <thead>
@@ -196,7 +220,7 @@ const METHODS: { value: Method; label: string }[] = [
           <p class="text-xs text-faint">Based on {{ d.intervalCount }} validated hourly readings. Tariff {{ d.tariffCode }} v{{ d.tariffVersion }}.</p>
         </div>
       }
-      <div dialog-footer class="border-t border-line p-4">
+      <div dialog-footer class="empty:hidden border-t border-line p-4">
         @if (detail() && detail()!.bill.totalDue > 0) {
           <button type="button" class="btn-primary w-full" (click)="payOne(detail()!.bill)">Pay {{ detail()!.bill.totalDue | inr }}</button>
         }
@@ -244,7 +268,7 @@ const METHODS: { value: Method; label: string }[] = [
         }
       }
       @if (checkoutError()) { <p role="alert" class="mt-3 rounded-lg bg-bad-soft p-3 text-sm">{{ checkoutError() }}</p> }
-      <div dialog-footer class="flex justify-end gap-2 border-t border-line p-4">
+      <div dialog-footer class="empty:hidden flex justify-end gap-2 border-t border-line p-4">
         @switch (stage()) {
           @case ('method') {
             <button type="button" class="btn-secondary" (click)="cancelCheckout()">Cancel</button>
@@ -272,7 +296,13 @@ export class Bills {
   private readonly router = inject(Router);
   private readonly toasts = inject(Toasts);
   private readonly notifications = inject(NotificationStore);
+  protected readonly customer = inject(CustomerStore);
   protected readonly methods = METHODS;
+  protected readonly years = Array.from({ length: 4 }, (_, index) => new Date().getFullYear() - index);
+  protected readonly meterFilter = signal('');
+  protected readonly yearFilter = signal('');
+  protected readonly exportable = computed(() => this.current() === 'payments'
+    ? (this.payments()?.content.length ?? 0) > 0 : (this.bills()?.content.length ?? 0) > 0);
   protected readonly tabs: { value: Tab; label: string }[] = [
     { value: 'unpaid', label: 'Unpaid' }, { value: 'paid', label: 'Paid' },
     { value: 'payments', label: 'Payments' }, { value: 'statement', label: 'Statement' },
@@ -302,10 +332,18 @@ export class Bills {
   private key = idempotencyKey();
 
   constructor() {
+    // Tracks only the route's tab; reload() reads other signals untracked so each change fetches exactly once.
+    let initial = true;
     effect(() => {
-      const tab = this.tab();
-      if (tab === 'payments' || tab === 'paid' || tab === 'statement') this.current.set(tab);
-      void this.reload();
+      const param = this.tab();
+      const next: Tab = param === 'payments' || param === 'paid' || param === 'statement' ? param : 'unpaid';
+      untracked(() => {
+        if (!initial && next === this.current()) return;
+        initial = false;
+        this.current.set(next);
+        this.page.set(0);
+        void this.reload();
+      });
     });
     effect(() => {
       const id = this.bill();
@@ -321,10 +359,47 @@ export class Bills {
     return inr(value);
   }
 
+  protected filter(change: { meter?: string; year?: string }): void {
+    if (change.meter !== undefined) this.meterFilter.set(change.meter);
+    if (change.year !== undefined) this.yearFilter.set(String(change.year));
+    this.page.set(0);
+    this.selected.set(new Map());
+    void this.reload();
+  }
+
+  /** Exports the rows on screen (the current page and filters) as CSV. */
+  protected exportCurrent(): void {
+    if (this.current() === 'payments') {
+      exportCsv('gridiq-payments.csv', this.payments()?.content ?? [], [
+        { header: 'Reference', value: (p) => p.paymentReference },
+        { header: 'Date', value: (p) => p.completedAt ?? p.createdAt },
+        { header: 'Method', value: (p) => p.paymentMethod },
+        { header: 'Amount (INR)', value: (p) => p.amount },
+        { header: 'Status', value: (p) => p.status },
+      ]);
+      return;
+    }
+    const suffix = [this.current(), this.yearFilter()].filter(Boolean).join('-');
+    exportCsv(`gridiq-bills-${suffix}.csv`, this.bills()?.content ?? [], [
+      { header: 'Bill number', value: (b) => b.billNumber },
+      { header: 'Period', value: (b) => b.period },
+      { header: 'Meter', value: (b) => b.meterSerial },
+      { header: 'Net billable kWh', value: (b) => b.netBillableKwh },
+      { header: 'Total (INR)', value: (b) => b.totalAmount },
+      { header: 'Due now (INR)', value: (b) => b.totalDue },
+      { header: 'Late fee (INR)', value: (b) => b.accruedLateFee },
+      { header: 'Due date', value: (b) => b.dueDate },
+      { header: 'Status', value: (b) => b.status },
+    ]);
+  }
+
   protected setTab(tab: Tab): void {
+    if (tab === this.current()) return;
     this.current.set(tab);
     this.page.set(0);
     this.selected.set(new Map());
+    void this.reload();
+    // The route change that follows sees the tab already active and does not fetch again.
     void this.router.navigate([], { queryParams: { tab, bill: null }, queryParamsHandling: 'merge', replaceUrl: true });
   }
 
@@ -339,9 +414,11 @@ export class Bills {
           this.ledger.set(await firstValueFrom(this.http.get<LedgerLine[]>('/api/v1/consumers/me/ledger?limit=100')));
           break;
         default: {
-          const status = this.current() === 'unpaid' ? 'OPEN' : 'SETTLED';
-          this.bills.set(await firstValueFrom(
-            this.http.get<Page<BillSummary>>(`/api/v1/bills?status=${status}&size=20&page=${this.page()}`)));
+          const params = new URLSearchParams({ status: this.current() === 'unpaid' ? 'OPEN' : 'SETTLED', size: '20',
+            page: String(this.page()) });
+          if (this.meterFilter()) params.set('meterId', this.meterFilter());
+          if (this.yearFilter()) params.set('year', this.yearFilter());
+          this.bills.set(await firstValueFrom(this.http.get<Page<BillSummary>>(`/api/v1/bills?${params}`)));
         }
       }
     } catch (error) {

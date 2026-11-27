@@ -1,14 +1,19 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from app.schemas import DailyBand, ForecastRequest, ForecastResponse
 from app.services import forecaster
 
 router = APIRouter(prefix="/ml/v1", tags=["forecast"])
+MIN_HISTORY_DAYS = 7
 
 
 @router.post("/forecast")
 def forecast(request: ForecastRequest) -> ForecastResponse:
     history = [(point.day, point.importKwh) for point in request.history if point.day < request.asOf]
+    days = len({day for day, _ in history})
+    if days < MIN_HISTORY_DAYS:
+        raise HTTPException(status_code=422, detail=(
+            f"At least {MIN_HISTORY_DAYS} days of history before asOf are required; {days} provided."))
     result = forecaster.forecast(history, request.asOf, request.cycleEnd)
     return ForecastResponse(
         meterId=request.meterId,

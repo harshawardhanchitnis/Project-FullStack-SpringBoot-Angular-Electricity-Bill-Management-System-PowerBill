@@ -45,7 +45,7 @@ class NotificationService {
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
     private static final DateTimeFormatter PERIOD = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH);
     private final NotificationStore store;
-    private final NotificationStream stream;
+    private final NotificationFanout stream;
     private final AccountDirectory accounts;
     private final StaffDirectory staff;
     private final UserDirectory users;
@@ -54,7 +54,7 @@ class NotificationService {
     private final String from;
     private final String appUrl;
 
-    NotificationService(NotificationStore store, NotificationStream stream, AccountDirectory accounts,
+    NotificationService(NotificationStore store, NotificationFanout stream, AccountDirectory accounts,
             StaffDirectory staff, UserDirectory users, JavaMailSender mail, ObjectMapper json,
             @Value("${gridiq.auth.mail-from}") String from, @Value("${gridiq.auth.frontend-url}") String appUrl) {
         this.store = store;
@@ -176,7 +176,8 @@ class NotificationService {
                 + ". " + event.reason();
         boolean created = notify(event.userId(), "BUDGET_ALERT", "Bill-shock alert for " + event.cycle(), message,
                 "/app/dashboard", Map.of("meterId", event.meterId()),
-                "budget:" + event.meterId() + ":" + event.cycle() + ":" + event.reason().hashCode());
+                // One alert of each kind per meter and cycle, however the countdown wording changes day to day.
+                "budget:" + event.meterId() + ":" + event.cycle() + ":" + event.kind());
         if (created) {
             accounts.findAccount(event.accountId()).ifPresent(account -> email(account.billingEmail(),
                     "Bill-shock alert for " + event.cycle(), "Your usage is trending above your plan.",
@@ -192,7 +193,7 @@ class NotificationService {
         }
         var created = store.insert(user, "IN_APP", category, truncate(title, 160), truncate(message, 1000), link,
                 json.writeValueAsString(metadata), truncate(dedupeKey, 120));
-        created.ifPresent(notification -> afterCommit(() -> stream.push(user, notification, store.unread(user))));
+        created.ifPresent(notification -> afterCommit(() -> stream.publish(user, notification, store.unread(user))));
         return created.isPresent();
     }
 

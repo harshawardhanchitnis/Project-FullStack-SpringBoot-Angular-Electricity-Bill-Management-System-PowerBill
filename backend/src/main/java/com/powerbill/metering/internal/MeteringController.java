@@ -160,6 +160,22 @@ class MeteringController {
                 greenButton.export(metering.export(user(jwt), id, from.toInstant(), to.toInstant())));
     }
 
+    @GetMapping("/ops/metering/meters")
+    @PreAuthorize(STAFF)
+    List<com.powerbill.consumer.MeterDirectory.Meter> searchMeters(@RequestParam(defaultValue = "") String q) {
+        if (q.strip().length() < 2 || q.length() > 40) {
+            throw badInput("Type at least two characters of a meter serial.");
+        }
+        return metering.searchMeters(q.strip(), 20);
+    }
+
+    @GetMapping("/ops/metering/meters/{id}/intervals")
+    @PreAuthorize(STAFF)
+    MeteringService.Intervals intervals(@PathVariable UUID id, @RequestParam OffsetDateTime from,
+            @RequestParam OffsetDateTime to) {
+        return metering.staffIntervals(id, from.toInstant(), to.toInstant());
+    }
+
     @PostMapping("/ops/metering/simulate")
     @PreAuthorize(STAFF)
     Map<String, Integer> simulate(@RequestBody Simulation request) {

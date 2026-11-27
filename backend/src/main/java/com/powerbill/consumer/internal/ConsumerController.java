@@ -51,6 +51,13 @@ class ConsumerController {
         return consumers.update(consumers.self(actor.id()), input, actor, RequestContext.from(request));
     }
 
+    @PatchMapping("/consumers/me/auto-pay")
+    ConsumerStore.Account autoPay(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody ConsumerRequests.AutoPay input,
+            HttpServletRequest request) {
+        Actor actor = Actor.from(jwt);
+        return consumers.autoPay(consumers.self(actor.id()), input, actor, RequestContext.from(request));
+    }
+
     @GetMapping("/consumers/me/meters")
     List<Meter> meters(@AuthenticationPrincipal Jwt jwt) {
         return consumers.details(consumers.self(Actor.from(jwt).id())).meters();

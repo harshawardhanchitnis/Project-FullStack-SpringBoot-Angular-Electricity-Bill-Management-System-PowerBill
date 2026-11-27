@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Component, computed, effect, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { LucidePlus, LucideSparkles } from '@lucide/angular';
+import { LucideKanban, LucidePlus, LucideSparkles, LucideTable2 } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { AuthStore } from '../../core/auth';
 import { Complaint, ComplaintDetail, Outage, Page, StaffMember } from '../../core/models';
@@ -24,8 +24,28 @@ const NEXT: Record<string, string[]> = {
   OPEN: ['IN_PROGRESS', 'RESOLVED'], ASSIGNED: ['IN_PROGRESS', 'RESOLVED'], IN_PROGRESS: ['RESOLVED'], RESOLVED: ['CLOSED'], CLOSED: [],
 };
 
+type DeskView = 'table' | 'kanban';
+
+const VIEW_KEY = 'gridiq-desk-view';
+
+/** Kanban columns in workflow order; closed tickets sit with the resolved ones. */
+const KANBAN_COLUMNS: { key: string; label: string; statuses: string[] }[] = [
+  { key: 'OPEN', label: 'Open', statuses: ['OPEN'] },
+  { key: 'ASSIGNED', label: 'Assigned', statuses: ['ASSIGNED'] },
+  { key: 'IN_PROGRESS', label: 'In progress', statuses: ['IN_PROGRESS'] },
+  { key: 'RESOLVED', label: 'Resolved', statuses: ['RESOLVED', 'CLOSED'] },
+];
+
+function storedView(): DeskView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'kanban' ? 'kanban' : 'table';
+  } catch {
+    return 'table';
+  }
+}
+
 @Component({
-  imports: [FormsModule, Dialog, EmptyState, ErrorBanner, Pager, StatusBadge, ...FORMAT_PIPES, LucideSparkles, LucidePlus],
+  imports: [FormsModule, Dialog, EmptyState, ErrorBanner, Pager, StatusBadge, ...FORMAT_PIPES, LucideSparkles, LucidePlus, LucideTable2, LucideKanban],
   template: `
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
@@ -39,41 +59,82 @@ const NEXT: Record<string, string[]> = {
     </div>
 
     @if (tab() === 'queue') {
-      <form class="mt-5 flex flex-wrap gap-2" role="search" (ngSubmit)="page.set(0); load()">
-        <label class="sr-only" for="desk-q">Search</label>
-        <input id="desk-q" class="input w-56" name="q" [(ngModel)]="query" placeholder="Ticket or subject" />
-        <label class="sr-only" for="desk-status">Status</label>
-        <select id="desk-status" class="input w-auto" name="status" [(ngModel)]="status">
-          <option value="">Any status</option>
-          @for (option of statuses; track option) { <option [value]="option">{{ option | humanize }}</option> }
-        </select>
-        <label class="sr-only" for="desk-priority">Priority</label>
-        <select id="desk-priority" class="input w-auto" name="priority" [(ngModel)]="priority">
-          <option value="">Any priority</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option>
-        </select>
-        <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="size-4 accent-[var(--brand)]" name="breached" [(ngModel)]="breached" /> SLA breached</label>
-        <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="size-4 accent-[var(--brand)]" name="mine" [(ngModel)]="mine" /> Assigned to me</label>
-        <button type="submit" class="btn-secondary">Apply</button>
-      </form>
-      @if (error()) { <div class="mt-4"><app-error [message]="error()!" (retry)="load()" /></div> }
-      <div class="table-wrap mt-4">
-        <table class="table">
-          <caption class="sr-only">Complaint queue</caption>
-          <thead><tr><th>Ticket</th><th>Subject</th><th>Type</th><th>Priority</th><th>SLA</th><th>Status</th></tr></thead>
-          <tbody>
-            @for (item of queue()?.content ?? []; track item.id) {
-              <tr class="clickable" (click)="open(item.id)">
-                <td><button type="button" class="num font-medium text-brand hover:underline" (click)="open(item.id); $event.stopPropagation()">{{ item.ticketNumber }}</button></td>
-                <td class="max-w-72 truncate">{{ item.subject }}</td>
-                <td>{{ item.complaintType | humanize }}</td>
-                <td><app-badge [status]="item.priority" /></td>
-                <td><span class="badge" [class]="sla(item).tone">{{ sla(item).text }}</span></td>
-                <td><app-badge [status]="item.status" /></td>
-              </tr>
-            } @empty { <tr><td colspan="6"><app-empty title="No tickets match" /></td></tr> }
-          </tbody>
-        </table>
+      <div class="mt-5 flex flex-wrap items-start justify-between gap-3">
+        <form class="flex flex-wrap gap-2" role="search" (ngSubmit)="page.set(0); load()">
+          <label class="sr-only" for="desk-q">Search</label>
+          <input id="desk-q" class="input w-56" name="q" [(ngModel)]="query" placeholder="Ticket or subject" />
+          <label class="sr-only" for="desk-status">Status</label>
+          <select id="desk-status" class="input w-auto" name="status" [(ngModel)]="status">
+            <option value="">Any status</option>
+            @for (option of statuses; track option) { <option [value]="option">{{ option | humanize }}</option> }
+          </select>
+          <label class="sr-only" for="desk-priority">Priority</label>
+          <select id="desk-priority" class="input w-auto" name="priority" [(ngModel)]="priority">
+            <option value="">Any priority</option><option value="CRITICAL">Critical</option><option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option>
+          </select>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="size-4 accent-[var(--brand)]" name="breached" [(ngModel)]="breached" /> SLA breached</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="size-4 accent-[var(--brand)]" name="mine" [(ngModel)]="mine" /> Assigned to me</label>
+          <button type="submit" class="btn-secondary">Apply</button>
+        </form>
+        <div class="tabs" role="tablist" aria-label="Ticket layout">
+          <button type="button" role="tab" class="tab" [attr.aria-selected]="view() === 'table'" (click)="setView('table')">
+            <svg lucideTable2 [size]="15" aria-hidden="true"></svg> Table</button>
+          <button type="button" role="tab" class="tab" [attr.aria-selected]="view() === 'kanban'" (click)="setView('kanban')">
+            <svg lucideKanban [size]="15" aria-hidden="true"></svg> Kanban</button>
+        </div>
       </div>
+      @if (error()) { <div class="mt-4"><app-error [message]="error()!" (retry)="load()" /></div> }
+      @if (view() === 'table') {
+        <div class="table-wrap mt-4">
+          <table class="table">
+            <caption class="sr-only">Complaint queue</caption>
+            <thead><tr><th>Ticket</th><th>Subject</th><th>Type</th><th>Priority</th><th>SLA</th><th>Status</th></tr></thead>
+            <tbody>
+              @for (item of queue()?.content ?? []; track item.id) {
+                <tr class="clickable" (click)="open(item.id)">
+                  <td><button type="button" class="num font-medium text-brand hover:underline" (click)="open(item.id); $event.stopPropagation()">{{ item.ticketNumber }}</button></td>
+                  <td class="max-w-72 truncate">{{ item.subject }}</td>
+                  <td>{{ item.complaintType | humanize }}</td>
+                  <td><app-badge [status]="item.priority" /></td>
+                  <td><span class="badge" [class]="sla(item).tone">{{ sla(item).text }}</span></td>
+                  <td><app-badge [status]="item.status" /></td>
+                </tr>
+              } @empty { <tr><td colspan="6"><app-empty title="No tickets match" /></td></tr> }
+            </tbody>
+          </table>
+        </div>
+      } @else {
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          @for (column of columns(); track column.key) {
+            <section class="min-w-0 rounded-xl border border-line bg-sunken p-3" [attr.aria-labelledby]="'kanban-' + column.key">
+              <h2 [id]="'kanban-' + column.key" class="flex items-center justify-between gap-2 px-1 text-sm font-semibold text-ink">
+                {{ column.label }}
+                <span class="badge num bg-surface text-muted">{{ column.items.length }}<span class="sr-only"> tickets</span></span>
+              </h2>
+              @if (column.items.length) {
+                <ul class="mt-3 space-y-2">
+                  @for (item of column.items; track item.id) {
+                    <li>
+                      <button type="button" class="block w-full cursor-pointer rounded-lg border border-line bg-surface p-3 text-left shadow-sm transition-colors hover:border-brand/50"
+                              (click)="open(item.id)">
+                        <span class="line-clamp-2 text-sm font-medium wrap-anywhere text-ink">{{ item.subject }}</span>
+                        <span class="num mt-1 block text-xs text-faint">{{ item.ticketNumber }}</span>
+                        <span class="mt-2 flex flex-wrap gap-1.5">
+                          <app-badge [status]="item.priority" />
+                          <span class="badge whitespace-normal" [class]="sla(item).tone">{{ sla(item).text }}</span>
+                          @if (item.status === 'CLOSED') { <app-badge status="CLOSED" /> }
+                        </span>
+                      </button>
+                    </li>
+                  }
+                </ul>
+              } @else {
+                <p class="mt-3 px-1 text-sm text-faint">No tickets</p>
+              }
+            </section>
+          }
+        </div>
+      }
       <app-pager [page]="page()" [size]="20" [total]="queue()?.totalElements ?? 0" (pageChange)="page.set($event); load()" />
     } @else {
       @if (canManage()) {
@@ -89,7 +150,12 @@ const NEXT: Record<string, string[]> = {
           <div class="flex items-end"><button type="submit" class="btn-primary w-full" [disabled]="busy()"><svg lucidePlus [size]="15" aria-hidden="true"></svg> Declare</button></div>
         </form>
       }
-      <div class="mt-4 space-y-3">
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" class="size-4 accent-[var(--brand)]" [checked]="showResolved()" (change)="toggleResolved()" /> Show resolved outages
+        </label>
+      </div>
+      <div class="mt-3 space-y-3">
         @for (outage of outages(); track outage.id) {
           <article class="card-pad">
             <div class="flex flex-wrap items-center gap-2">
@@ -97,7 +163,8 @@ const NEXT: Record<string, string[]> = {
               <span class="ml-auto text-xs text-faint">{{ outage.incidentCode }}</span>
             </div>
             <p class="mt-1 text-sm text-muted">{{ outage.city }} · {{ outage.affectedPincodes.join(', ') }} · started {{ outage.startsAt | moment }}
-              @if (outage.estimatedRestorationAt) { · ETA {{ outage.estimatedRestorationAt | moment }} }</p>
+              @if (outage.resolvedAt) { · resolved {{ outage.resolvedAt | moment }} }
+              @else if (outage.estimatedRestorationAt) { · ETA {{ outage.estimatedRestorationAt | moment }} }</p>
             <p class="mt-2 text-sm">{{ outage.description }}</p>
             @if (canManage() && outage.status !== 'RESOLVED') {
               <div class="mt-3 flex flex-wrap gap-2">
@@ -109,7 +176,7 @@ const NEXT: Record<string, string[]> = {
               </div>
             }
           </article>
-        } @empty { <div class="card"><app-empty title="No active outages" /></div> }
+        } @empty { <div class="card"><app-empty [title]="showResolved() ? 'No outages recorded' : 'No active outages'" /></div> }
       </div>
     }
 
@@ -126,7 +193,12 @@ const NEXT: Record<string, string[]> = {
 
           <section class="rounded-xl border border-brand/30 bg-brand-soft p-4">
             <div class="flex items-center justify-between gap-2">
-              <p class="flex items-center gap-2 font-semibold text-brand-strong"><svg lucideSparkles [size]="16" aria-hidden="true"></svg> AI triage</p>
+              <div class="flex min-w-0 flex-wrap items-center gap-2">
+                <p class="flex items-center gap-2 font-semibold text-brand-strong"><svg lucideSparkles [size]="16" aria-hidden="true"></svg> AI triage</p>
+                @if (triage$()?.providerUsed; as provider) {
+                  <span class="badge bg-surface text-muted" title="Provider that answered this triage"><span class="sr-only">Answered by </span>{{ provider }}</span>
+                }
+              </div>
               <button type="button" class="btn-secondary btn-sm" [disabled]="triaging()" (click)="triage(d.complaint.id)">{{ triage$() ? 'Refresh' : 'Analyse' }}</button>
             </div>
             @if (triaging()) { <div class="skeleton mt-3 h-20"></div> }
@@ -135,7 +207,12 @@ const NEXT: Record<string, string[]> = {
               @if (t.evidence.length) { <ul class="mt-2 list-disc pl-5 text-muted">@for (line of t.evidence; track $index) { <li>{{ line }}</li> }</ul> }
               @if (t.checks.length) { <p class="mt-2 font-medium">Next steps</p><ul class="list-disc pl-5 text-muted">@for (line of t.checks; track $index) { <li>{{ line }}</li> }</ul> }
               <div class="mt-3 rounded-lg bg-surface p-3"><p class="text-xs text-faint">Suggested reply · priority {{ t.suggestedPriority | humanize }}</p><p class="mt-1">{{ t.suggestedResponse }}</p></div>
-              <button type="button" class="btn-ghost btn-sm mt-2" (click)="reply = t.suggestedResponse; internal = false">Use as reply</button>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <button type="button" class="btn-ghost btn-sm" (click)="reply = t.suggestedResponse; internal = false">Use as reply</button>
+                @if (canManage() && t.suggestedPriority !== d.complaint.priority) {
+                  <button type="button" class="btn-secondary btn-sm" [disabled]="busy()" (click)="update(d, { priority: t.suggestedPriority })">Apply suggested priority</button>
+                }
+              </div>
             }
           </section>
 
@@ -177,7 +254,7 @@ const NEXT: Record<string, string[]> = {
           </section>
         </div>
       }
-      <div dialog-footer class="border-t border-line p-4">
+      <div dialog-footer class="empty:hidden border-t border-line p-4">
         @if (detail() && detail()!.complaint.status !== 'CLOSED' && canManage()) {
           <form class="space-y-2" (ngSubmit)="comment()">
             <label class="sr-only" for="desk-reply">Message</label>
@@ -201,9 +278,15 @@ export class SupportDesk {
   protected readonly statuses = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
   protected readonly canManage = computed(() => ['SUPPORT_AGENT', 'FIELD_ENGINEER', 'SUPER_ADMIN'].includes(this.auth.role() ?? ''));
   protected readonly tab = signal<'queue' | 'outages'>('queue');
+  protected readonly view = signal<DeskView>(storedView());
   protected readonly page = signal(0);
   protected readonly queue = signal<Page<Complaint> | null>(null);
+  protected readonly columns = computed(() => {
+    const items = this.queue()?.content ?? [];
+    return KANBAN_COLUMNS.map((column) => ({ ...column, items: items.filter((item) => column.statuses.includes(item.status)) }));
+  });
   protected readonly outages = signal<Outage[]>([]);
+  protected readonly showResolved = signal(false);
   protected readonly staff = signal<StaffMember[]>([]);
   protected readonly detail = signal<ComplaintDetail | null>(null);
   protected readonly triage$ = signal<Triage | null>(null);
@@ -219,6 +302,7 @@ export class SupportDesk {
   protected internal = false;
   protected resolution = '';
   protected outageDraft = { title: '', city: '', pincodes: '', severity: 'UNPLANNED', eta: '', description: '' };
+  private outageRequest = 0;
 
   constructor() {
     void this.load();
@@ -237,6 +321,15 @@ export class SupportDesk {
     return NEXT[status] ?? [];
   }
 
+  protected setView(view: DeskView): void {
+    this.view.set(view);
+    try {
+      localStorage.setItem(VIEW_KEY, view);
+    } catch {
+      /* storage may be unavailable; the choice then lasts for this visit only */
+    }
+  }
+
   async load(): Promise<void> {
     this.error.set(null);
     const params = new URLSearchParams({ page: String(this.page()), size: '20', q: this.query.trim() });
@@ -252,7 +345,16 @@ export class SupportDesk {
   }
 
   protected async loadOutages(): Promise<void> {
-    this.outages.set(await firstValueFrom(this.http.get<Outage[]>('/api/v1/ops/outages')).catch(() => []));
+    // A quick toggle can overlap two requests; only the latest one may update the list.
+    const request = ++this.outageRequest;
+    const url = this.showResolved() ? '/api/v1/ops/outages?includeResolved=true' : '/api/v1/ops/outages';
+    const outages = await firstValueFrom(this.http.get<Outage[]>(url)).catch(() => [] as Outage[]);
+    if (request === this.outageRequest) this.outages.set(outages);
+  }
+
+  protected toggleResolved(): void {
+    this.showResolved.update((show) => !show);
+    void this.loadOutages();
   }
 
   protected async open(id: string): Promise<void> {

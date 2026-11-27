@@ -85,6 +85,28 @@ class ReadingStore {
                 .query(com.powerbill.metering.MeterUsage.DailyUsage.class).list();
     }
 
+    java.util.Map<UUID, com.powerbill.metering.MeterUsage.Totals> totals(Instant from, Instant to) {
+        var totals = new java.util.HashMap<UUID, com.powerbill.metering.MeterUsage.Totals>();
+        db.sql("""
+                SELECT meter_id, coalesce(sum(import_kwh),0) AS imports, coalesce(sum(export_kwh),0) AS exports
+                FROM daily_meter_usage WHERE bucket>=? AND bucket<? GROUP BY meter_id
+                """).params(Timestamp.from(from), Timestamp.from(to))
+                .query((row, index) -> totals.put(row.getObject("meter_id", UUID.class),
+                        new com.powerbill.metering.MeterUsage.Totals(row.getBigDecimal("imports"),
+                                row.getBigDecimal("exports"))))
+                .list();
+        return totals;
+    }
+
+    java.util.Map<UUID, Integer> openAnomaliesByMeter() {
+        var open = new java.util.HashMap<UUID, Integer>();
+        db.sql("""
+                SELECT meter_id, count(*) AS open FROM meter_anomalies WHERE status IN ('OPEN','INVESTIGATING')
+                GROUP BY meter_id
+                """).query((row, index) -> open.put(row.getObject("meter_id", UUID.class), row.getInt("open"))).list();
+        return open;
+    }
+
     List<com.powerbill.metering.MeterUsage.HourlyUsage> hourly(UUID meter, Instant from, Instant to) {
         return db.sql("""
                 SELECT local_hour AS hour, coalesce(sum(import_kwh),0) AS import_kwh,

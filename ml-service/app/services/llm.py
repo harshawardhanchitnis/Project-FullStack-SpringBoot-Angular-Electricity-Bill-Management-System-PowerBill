@@ -18,10 +18,21 @@ from app.config import Settings
 
 LOG = logging.getLogger(__name__)
 NUMBER = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
+# Small whole numbers such as the day in "27 Nov", list numbering or "slab 3" may appear without being in the
+# facts, but never when they carry money, a percentage, an energy or electrical unit or a duration.
+SMALL_NUMERAL = 31
+CURRENCY_BEFORE = re.compile(r"(?:₹|\binr|\brs\.?)\s*$", re.IGNORECASE)
+UNIT_AFTER = re.compile(
+    r"\s*(?:%|per\s?cent\b|rupees?\b|paise\b|kwh\b|kw\b|kva\b|watts?\b|w\b|volts?\b|v\b|units?\b|×|x\b"
+    r"|hours?\b|hrs?\b|h\b|days?\b|weeks?\b|months?\b|years?\b)",
+    re.IGNORECASE)
+HISTORY_TURNS = 6
+HISTORY_CHARS = 500
 SYSTEM_PROMPT = (
     "You are the PowerBill GridIQ energy assistant for an Indian electricity utility. Rewrite the DRAFT answer "
     "so it reads naturally and stays concise. Use only facts from DRAFT and CONTEXT. Do not introduce any new "
-    "number, amount, date or percentage. Keep the rupee symbol and units. Answer in markdown."
+    "number, amount, date or percentage. Keep the rupee symbol and units. RECENT CONVERSATION, when present, only "
+    "shows what the customer is following up on; never take figures from it. Answer in markdown."
 )
 
 
@@ -61,16 +72,30 @@ def allowed_numbers(*sources: Any) -> set[str]:
     return allowed
 
 
+def _is_quantity(text: str, match: re.Match[str]) -> bool:
+    """True when the number is money (₹, INR, Rs), a percentage, carries a unit or is a duration."""
+    before = text[max(0, match.start() - 6) : match.start()]
+    return bool(CURRENCY_BEFORE.search(before) or UNIT_AFTER.match(text, match.end()))
+
+
 def ungrounded_numbers(answer: str, allowed: set[str]) -> list[str]:
     missing = []
-    for token in NUMBER.findall(answer):
+    for match in NUMBER.finditer(answer):
+        token = match.group()
         normalised = _normalise(token)
-        if normalised is None:
+        if normalised is None or normalised in allowed:
             continue
-        if normalised in allowed or (Decimal(normalised) <= 31 and "." not in normalised):
+        if "." not in normalised and Decimal(normalised) <= SMALL_NUMERAL and not _is_quantity(answer, match):
             continue
         missing.append(token)
     return missing
+
+
+def _conversation(history: list[dict[str, str]] | None) -> str:
+    """The last few turns, each trimmed, so a provider can tell what a follow-up question refers to."""
+    turns = "\n".join(f"{turn.get('role', 'user')}: {' '.join(str(turn.get('content', '')).split())[:HISTORY_CHARS]}"
+                      for turn in (history or [])[-HISTORY_TURNS:])
+    return f"RECENT CONVERSATION (oldest first):\n{turns}\n\n" if turns else ""
 
 
 def _post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float) -> dict[str, Any]:
@@ -80,11 +105,12 @@ def _post(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: f
         return json.loads(response.read().decode())
 
 
-def rewrite(settings: Settings, draft: str, context: dict[str, Any], question: str) -> str | None:
+def rewrite(settings: Settings, draft: str, context: dict[str, Any], question: str,
+            history: list[dict[str, str]] | None = None) -> str | None:
     provider = settings.copilot_provider.lower()
     if provider == "deterministic":
         return None
-    user = (f"QUESTION: {question}\n\nDRAFT:\n{draft}\n\nCONTEXT (JSON):\n"
+    user = (f"{_conversation(history)}QUESTION: {question}\n\nDRAFT:\n{draft}\n\nCONTEXT (JSON):\n"
             f"{json.dumps(context, default=str)[:12000]}")
     try:
         if provider == "ollama":

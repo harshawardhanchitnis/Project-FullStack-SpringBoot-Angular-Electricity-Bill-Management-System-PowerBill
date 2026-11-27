@@ -67,10 +67,15 @@ class BillingPaymentFlowTests extends IntegrationTestSupport {
         var request = Map.of("billIds", List.of(billId), "paymentMethod", "UPI");
         assertThat(call("POST", "/payments/checkout", request, customer, null).statusCode()).isEqualTo(400);
 
+        // Warm the dashboard cache so the test proves a payment invalidates it, not just that it was empty.
+        String overviewPath = "/analytics/consumer/overview?meterId=" + open.getFirst().path("meterId").asText();
+        int openBefore = json(call("GET", overviewPath, null, customer, null)).path("receivables").path("openBills").asInt();
+
         String key = UUID.randomUUID().toString();
         var created = checkout(customer, request, key);
         assertThat(created.statusCode()).withFailMessage(created.body()).isEqualTo(201);
         var payment = json(created);
+        assertThat(payment.path("paymentMethod").asText()).isEqualTo("UPI");
         assertThat(payment.path("amount").decimalValue())
                 .isEqualByComparingTo(open.getFirst().path("totalDue").decimalValue());
         var replay = checkout(customer, request, key);
@@ -122,12 +127,82 @@ class BillingPaymentFlowTests extends IntegrationTestSupport {
         var ledger = json(call("GET", "/consumers/me/ledger", null, customer, null));
         assertThat(ledger.get(0).path("referenceType").asText()).isEqualTo("PAYMENT");
 
+        // The settled bill leaves the dashboard straight away instead of after the cache expires.
+        assertThat(awaitOpenBills(overviewPath, customer, openBefore - 1))
+                .withFailMessage("The dashboard still showed the paid bill").isTrue();
+
+        // Staff see which meter each bill belongs to.
+        var opsBills = json(call("GET", "/ops/bills?size=5", null, demoToken("billing"), null)).path("content");
+        assertThat(opsBills.get(0).path("meterSerial").asText()).startsWith("M-");
+
         // The receipt email and the in-app notification both survive: a mail problem must never roll back the inbox.
         assertThat(awaitPaymentNotification(paymentId)).withFailMessage("No payment notification was stored").isTrue();
         String billingEmail = json(call("GET", "/consumers/me", null, customer, null)).path("account")
                 .path("billingEmail").asText();
         assertThat(mailArrived(billingEmail, "Payment received " + payment.path("paymentReference").asText()))
                 .withFailMessage("No receipt email reached Mailpit").isTrue();
+    }
+
+    @Test
+    void autoPaySettlesANewlyIssuedBillOnceThroughTheSignedGatewayPath() throws Exception {
+        String customer = demoToken("customer12");
+        var account = json(call("GET", "/consumers/me", null, customer, null)).path("account");
+        long version = account.path("version").asLong();
+        assertThat(call("PATCH", "/consumers/me/auto-pay", Map.of("enabled", true, "version", version + 5), customer,
+                null).statusCode()).isEqualTo(409);
+        var enabled = call("PATCH", "/consumers/me/auto-pay", Map.of("enabled", true, "version", version), customer, null);
+        assertThat(enabled.statusCode()).withFailMessage(enabled.body()).isEqualTo(200);
+        assertThat(json(enabled).path("autoPayEnabled").asBoolean()).isTrue();
+        try {
+            // A month with readings but no demo invoice yet; issuing it triggers the mandate.
+            String meterId = json(call("GET", "/consumers/me/meters", null, customer, null)).get(0).path("id").asText();
+            var month = YearMonth.now(ZoneId.of("Asia/Kolkata")).minusMonths(8);
+            var issued = call("POST", "/ops/bills/generate", Map.of("meterId", meterId, "year", month.getYear(),
+                    "month", month.getMonthValue()), demoToken("billing"), null);
+            assertThat(issued.statusCode()).withFailMessage(issued.body()).isEqualTo(201);
+            UUID billId = UUID.fromString(json(issued).path("bill").path("id").asText());
+
+            assertThat(awaitBillStatus(billId, customer, "PAID")).withFailMessage("Auto-pay did not settle the bill")
+                    .isTrue();
+            assertThat(db.sql("""
+                    SELECT count(*) FROM payment_transactions t JOIN payment_allocations a ON a.payment_transaction_id=t.id
+                    WHERE a.bill_id=? AND t.payment_method='AUTO_PAY' AND t.status='SUCCEEDED' AND t.webhook_verified
+                    """).param(billId).query(Long.class).single()).isEqualTo(1);
+
+            // A manual sweep also settles the account's older open bills, but never charges this bill again.
+            var sweep = call("POST", "/ops/payments/auto-pay/run", Map.of(), demoToken("billing"), null);
+            assertThat(sweep.statusCode()).withFailMessage(sweep.body()).isEqualTo(200);
+            assertThat(db.sql("SELECT count(*) FROM payment_allocations WHERE bill_id=?").param(billId)
+                    .query(Long.class).single()).isEqualTo(1);
+            assertThat(json(call("POST", "/ops/payments/auto-pay/run", Map.of(), demoToken("billing"), null))
+                    .path("settledBills").asInt()).isZero();
+            assertThat(call("POST", "/ops/payments/auto-pay/run", Map.of(), customer, null).statusCode()).isEqualTo(403);
+        } finally {
+            long current = json(call("GET", "/consumers/me", null, customer, null)).path("account").path("version").asLong();
+            call("PATCH", "/consumers/me/auto-pay", Map.of("enabled", false, "version", current), customer, null);
+        }
+    }
+
+    private boolean awaitBillStatus(UUID billId, String token, String status) throws Exception {
+        for (int attempt = 0; attempt < 40; attempt++) {
+            if (json(call("GET", "/bills/" + billId, null, token, null)).path("bill").path("status").asText()
+                    .equals(status)) {
+                return true;
+            }
+            Thread.sleep(250);
+        }
+        return false;
+    }
+
+    private boolean awaitOpenBills(String overviewPath, String token, int expected) throws Exception {
+        for (int attempt = 0; attempt < 40; attempt++) {
+            if (json(call("GET", overviewPath, null, token, null)).path("receivables").path("openBills").asInt()
+                    == expected) {
+                return true;
+            }
+            Thread.sleep(250);
+        }
+        return false;
     }
 
     private boolean awaitPaymentNotification(UUID paymentId) throws InterruptedException {

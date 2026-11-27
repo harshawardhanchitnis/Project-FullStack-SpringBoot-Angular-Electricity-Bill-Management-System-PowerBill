@@ -9,10 +9,13 @@ router = APIRouter(prefix="/ml/v1/copilot", tags=["copilot"])
 @router.post("/respond")
 def respond(body: CopilotRequest, request: Request) -> CopilotResponse:
     settings = request.app.state.settings
-    answer = copilot_engine.respond(body.message, body.context, request.app.state.rag)
+    # Prior turns from the Core API: they keep follow-ups on topic and give an LLM rewrite its context. Their
+    # figures are never added to the grounding allow-list, because the client supplies them.
+    history = [turn.model_dump() for turn in body.history]
+    answer = copilot_engine.respond(body.message, body.context, request.app.state.rag, history)
     draft = answer.markdown()
     text, provider = draft, "deterministic"
-    rewritten = llm.rewrite(settings, draft, body.context, body.message)
+    rewritten = llm.rewrite(settings, draft, body.context, body.message, history)
     if rewritten:
         allowed = llm.allowed_numbers(body.context, draft, body.message)
         if llm.ungrounded_numbers(rewritten, allowed):

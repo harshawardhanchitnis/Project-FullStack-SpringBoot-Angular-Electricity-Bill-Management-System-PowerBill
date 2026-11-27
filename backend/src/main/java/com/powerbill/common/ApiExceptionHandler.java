@@ -69,8 +69,30 @@ class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     ProblemDetail handleUnexpectedException(Exception error, HttpServletRequest request) {
-        LOG.error("Unhandled request error ({})", error.getClass().getName());
+        // The response stays generic; the log keeps the full stack trace, keyed by correlation ID, with messages
+        // redacted because database errors can echo row values such as email addresses.
+        LOG.error("Unhandled request error on {} {} (correlationId={})", request.getMethod(), request.getRequestURI(),
+                request.getAttribute(CorrelationIdFilter.ATTRIBUTE), redacted(error, 0));
         return problem(request, HttpStatus.INTERNAL_SERVER_ERROR, "The server could not complete the request.");
+    }
+
+    /** Copies an exception chain with personal data removed from the messages and the stack traces kept. */
+    static Throwable redacted(Throwable error, int depth) {
+        String message = error.getMessage() == null ? null : error.getMessage()
+                .replaceAll("[\\w.+-]+@[\\w-]+(\\.[\\w-]+)+", "[email]")
+                .replaceAll("=\\([^)]*\\)", "=([redacted])")
+                .replaceAll("\\d{6,}", "[number]");
+        Throwable cause = error.getCause() == null || depth >= 5 ? null : redacted(error.getCause(), depth + 1);
+        var copy = new RedactedException(error.getClass().getName() + (message == null ? "" : ": " + message), cause);
+        copy.setStackTrace(error.getStackTrace());
+        return copy;
+    }
+
+    private static final class RedactedException extends RuntimeException {
+        RedactedException(String message, Throwable cause) {
+            // The stack trace must stay writable, or setStackTrace() silently keeps this constructor's trace.
+            super(message, cause, false, true);
+        }
     }
 
     private ProblemDetail problem(HttpServletRequest request, HttpStatus status, String detail) {

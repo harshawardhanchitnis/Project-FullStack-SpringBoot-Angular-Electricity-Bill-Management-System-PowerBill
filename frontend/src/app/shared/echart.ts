@@ -110,7 +110,7 @@ export class EChart {
     this.chart.setOption(
       {
         backgroundColor: 'transparent',
-        textStyle: { fontFamily: 'Inter, system-ui, sans-serif', color: colors.muted },
+        textStyle: { fontFamily: "'Inter Variable', Inter, system-ui, sans-serif", color: colors.muted },
         animationDuration: 500,
         ...build(colors),
       },

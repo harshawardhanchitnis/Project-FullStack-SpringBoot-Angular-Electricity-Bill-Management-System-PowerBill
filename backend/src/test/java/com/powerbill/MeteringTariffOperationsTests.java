@@ -21,6 +21,28 @@ class MeteringTariffOperationsTests extends IntegrationTestSupport {
     private static final ZoneId INDIA = ZoneId.of("Asia/Kolkata");
 
     @Test
+    void pricesAMeterWithItsTariffOverrideWhenOneIsSet() throws Exception {
+        String customer = demoToken("customer05");
+        var meter = json(call("GET", "/consumers/me/meters", null, customer, null)).get(0);
+        UUID meterId = UUID.fromString(meter.path("id").asText());
+        assertThat(meter.path("connectionType").asText()).isEqualTo("DOMESTIC");
+        UUID commercial = db.sql("SELECT id FROM tariff_plans WHERE connection_type='COMMERCIAL' AND is_active "
+                + "ORDER BY effective_from DESC LIMIT 1").query(UUID.class).single();
+        var input = Map.of("meterId", meterId.toString(),
+                "month", java.time.YearMonth.now(INDIA).minusMonths(1).toString(), "loadShiftPct", 0, "rooftopSolarKw", 0);
+        try {
+            db.sql("UPDATE smart_meters SET tariff_plan_id=? WHERE id=?").params(commercial, meterId).update();
+            var priced = call("POST", "/tariffs/simulate", input, customer, null);
+            assertThat(priced.statusCode()).withFailMessage(priced.body()).isEqualTo(200);
+            assertThat(json(priced).path("tariffPlanId").asText()).isEqualTo(commercial.toString());
+        } finally {
+            db.sql("UPDATE smart_meters SET tariff_plan_id=NULL WHERE id=?").param(meterId).update();
+        }
+        var standard = json(call("POST", "/tariffs/simulate", input, customer, null));
+        assertThat(standard.path("tariffPlanId").asText()).isNotEqualTo(commercial.toString());
+    }
+
+    @Test
     void plantsATrueZeroReadFlatlineOnTheSolarDemoMeter() {
         // The detector reports ZERO_READ only when import and export are both zero for 24+ hours, so the planted
         // flatline must also suppress solar export; otherwise it surfaces as a tamper suspicion instead.
@@ -68,6 +90,22 @@ class MeteringTariffOperationsTests extends IntegrationTestSupport {
         var faulty = Map.of("start", at(4, 9).toInstant().toString(), "importKwh", 1.1, "exportKwh", 0, "voltage", 300);
         var flagged = call("POST", path + "/readings", faulty, billing, null);
         assertThat(json(flagged).path("flagged").asInt()).isEqualTo(1);
+
+        // Staff tools: find the meter by serial, then see its flagged and missing hours for the day.
+        String serial = registered.path("meters").get(0).path("meterSerial").asText();
+        var found = call("GET", "/ops/metering/meters?q=" + serial.substring(2), null, field, null);
+        assertThat(found.statusCode()).withFailMessage(found.body()).isEqualTo(200);
+        assertThat(found.body()).contains(meter);
+        assertThat(call("GET", "/ops/metering/meters?q=" + serial, null, customer, null).statusCode()).isEqualTo(403);
+        String day = "?from=" + at(4, 0).toOffsetDateTime() + "&to=" + at(5, 0).toOffsetDateTime();
+        var intervals = json(call("GET", "/ops/metering/meters/" + meter + "/intervals" + day.replace("+", "%2B"),
+                null, field, null));
+        assertThat(intervals.path("flaggedCount").asInt()).isEqualTo(1);
+        assertThat(intervals.path("readings").size()).isEqualTo(1);
+        assertThat(intervals.path("missing").toString()).contains(at(4, 10).toInstant().toString());
+        assertThat(call("GET", "/ops/metering/meters/" + meter + "/intervals?from=" + at(1, 0).toOffsetDateTime()
+                .toString().replace("+", "%2B") + "&to=" + at(12, 0).toOffsetDateTime().toString().replace("+", "%2B"),
+                null, field, null).statusCode()).isEqualTo(400);
         var corrected = call("PATCH", path + "/readings", Map.of("reason", "Check meter confirmed 230 V",
                 "reading", Map.of("start", faulty.get("start"), "importKwh", 1.1, "exportKwh", 0, "voltage", 230)),
                 billing, null);

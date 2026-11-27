@@ -3,6 +3,7 @@ package com.powerbill;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.BufferedReader;
+import java.math.BigDecimal;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
@@ -167,6 +168,26 @@ class SupportNotificationFlowTests extends IntegrationTestSupport {
         assertThat(kpis.path("aging").size()).isEqualTo(5);
         assertThat(kpis.path("collectionEfficiencyPct").decimalValue().signum()).isPositive();
         assertThat(call("GET", "/ops/analytics/executive", null, customer, null).statusCode()).isEqualTo(403);
+
+        // Regional breakdown: every demo city appears, with energy, collection and a loss proxy between 0 and 100%.
+        var regions = kpis.path("regions");
+        assertThat(regions.toString()).contains("Pune", "Mumbai");
+        for (JsonNode region : regions) {
+            assertThat(region.path("meters").asInt()).isPositive();
+            if (!region.path("lossProxyPct").isNull()) {
+                assertThat(region.path("lossProxyPct").decimalValue()).isBetween(BigDecimal.ZERO, BigDecimal.valueOf(100));
+            }
+        }
+
+        // Peer benchmark for a common domestic meter: aggregates only, from at least four other meters.
+        String small = demoToken("customer01");
+        var meters = json(call("GET", "/consumers/me/meters", null, small, null));
+        String fiveKw = meters.get(1).path("id").asText();
+        var peers = json(call("GET", "/analytics/consumer/overview?meterId=" + fiveKw, null, small, null)).path("peers");
+        assertThat(peers.path("peers").asInt()).isGreaterThanOrEqualTo(4);
+        assertThat(peers.path("group").asText()).isEqualTo("Domestic · up to 5 kW");
+        assertThat(peers.path("moreEfficientThanPct").asInt()).isBetween(0, 100);
+        assertThat(peers.toString()).doesNotContain("meterId", "consumerNumber");
     }
 
     private Map<String, Object> complaint(String type, String billId) {

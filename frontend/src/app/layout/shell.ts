@@ -1,11 +1,11 @@
-import { Component, computed, inject, input, signal } from '@angular/core';
+import { Component, ElementRef, computed, inject, input, signal, viewChild } from '@angular/core';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { filter, map } from 'rxjs';
 import {
   LucideActivity, LucideBell, LucideCalculator, LucideChartLine, LucideDynamicIcon, LucideGauge, LucideHeadset,
   LucideLifeBuoy, LucideLogOut, LucideMenu, LucideMonitor, LucideMoon, LucideReceipt, LucideScrollText,
-  LucideShieldCheck, LucideSparkles, LucideSun, LucideUser, LucideUsers, LucideX, LucideZap,
+  LucideSearch, LucideShieldCheck, LucideSparkles, LucideSun, LucideUser, LucideUsers, LucideX, LucideZap,
 } from '@lucide/angular';
 import { AuthStore } from '../core/auth';
 import { CustomerStore } from '../core/customer';
@@ -13,6 +13,7 @@ import { Role } from '../core/models';
 import { NotificationStore, ThemeStore } from '../core/ui-state';
 import { HumanizePipe, RelativePipe } from '../shared/format';
 import { CopilotDrawer, CopilotState } from './copilot';
+import { CommandPalette } from './palette';
 
 interface NavItem {
   label: string;
@@ -48,8 +49,10 @@ const OPS_NAV: NavItem[] = [
   selector: 'app-shell',
   imports: [
     RouterOutlet, RouterLink, RouterLinkActive, LucideDynamicIcon, LucideMenu, LucideX, LucideBell, LucideSun,
-    LucideMoon, LucideMonitor, LucideLogOut, LucideSparkles, LucideZap, HumanizePipe, RelativePipe, CopilotDrawer,
+    LucideMoon, LucideMonitor, LucideLogOut, LucideSparkles, LucideZap, LucideSearch, HumanizePipe, RelativePipe,
+    CopilotDrawer, CommandPalette,
   ],
+  host: { '(document:click)': 'onDocumentClick($event)', '(document:keydown.escape)': 'bellOpen.set(false)' },
   template: `
     <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[60] focus:rounded-lg focus:bg-surface focus:px-4 focus:py-2">
       Skip to content
@@ -59,7 +62,7 @@ const OPS_NAV: NavItem[] = [
         <div class="fixed inset-0 z-30 bg-slate-950/40 lg:hidden" aria-hidden="true" (click)="menuOpen.set(false)"></div>
       }
       <aside
-        class="fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-line bg-surface transition-transform lg:static lg:translate-x-0"
+        class="fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-line bg-surface transition-transform lg:sticky lg:top-0 lg:h-dvh lg:translate-x-0"
         [class.-translate-x-full]="!menuOpen()" aria-label="Primary"
       >
         <div class="flex h-16 items-center gap-2.5 border-b border-line px-5">
@@ -99,13 +102,21 @@ const OPS_NAV: NavItem[] = [
           </button>
           @if (portal() === 'customer' && customer.meters().length > 1) {
             <label class="sr-only" for="meter-select">Meter</label>
-            <select id="meter-select" class="input w-auto max-w-[11rem] sm:max-w-xs" (change)="selectMeter($event)">
+            <select id="meter-select" class="input min-w-0 flex-1 sm:w-auto sm:max-w-xs sm:flex-none" (change)="selectMeter($event)">
               @for (meter of customer.meters(); track meter.id) {
                 <option [value]="meter.id" [selected]="meter.id === customer.meter()?.id">{{ meter.meterSerial }} · {{ customer.premiseFor(meter.premiseId)?.label }}</option>
               }
             </select>
           }
-          <div class="ml-auto flex items-center gap-1">
+          <div class="ml-auto flex shrink-0 items-center gap-1">
+            <button type="button" class="btn-secondary btn-sm hidden md:inline-flex" (click)="paletteOpen.set(true)"
+                    aria-keyshortcuts="Control+K Meta+K">
+              <svg lucideSearch [size]="15" aria-hidden="true"></svg> Search…
+              <kbd class="ml-2 rounded border border-line px-1.5 text-[10px] text-faint">Ctrl K</kbd>
+            </button>
+            <button type="button" class="icon-btn md:hidden" aria-label="Search" (click)="paletteOpen.set(true)">
+              <svg lucideSearch [size]="18" aria-hidden="true"></svg>
+            </button>
             @if (portal() === 'customer') {
               <button type="button" class="btn-secondary btn-sm hidden sm:inline-flex" (click)="copilotOpen.set(true)">
                 <svg lucideSparkles [size]="15" aria-hidden="true"></svg> Copilot
@@ -122,7 +133,7 @@ const OPS_NAV: NavItem[] = [
                 @default { <svg lucideMonitor [size]="18" aria-hidden="true"></svg> }
               }
             </button>
-            <div class="relative">
+            <div class="relative" #bell>
               <button type="button" class="icon-btn relative" [attr.aria-expanded]="bellOpen()" aria-haspopup="true"
                       [attr.aria-label]="'Notifications, ' + notifications.unread() + ' unread'" (click)="toggleBell()">
                 <svg lucideBell [size]="18" aria-hidden="true"></svg>
@@ -176,6 +187,7 @@ const OPS_NAV: NavItem[] = [
     @if (portal() === 'customer') {
       <app-copilot [open]="copilotOpen()" (closed)="copilotOpen.set(false)" />
     }
+    <app-palette [open]="paletteOpen()" [portal]="portal()" [routes]="nav()" (openChange)="paletteOpen.set($event)" />
   `,
 })
 export class Shell {
@@ -187,6 +199,8 @@ export class Shell {
   private readonly router = inject(Router);
   protected readonly menuOpen = signal(false);
   protected readonly bellOpen = signal(false);
+  protected readonly paletteOpen = signal(false);
+  private readonly bell = viewChild<ElementRef<HTMLElement>>('bell');
   protected readonly copilotOpen = inject(CopilotState).open;
   protected readonly nav = computed(() => {
     const role = this.auth.role();
@@ -216,6 +230,11 @@ export class Shell {
 
   protected toggleBell(): void {
     this.bellOpen.update((open) => !open);
+  }
+
+  /** Closes the notifications popover when the user clicks anywhere outside it. */
+  protected onDocumentClick(event: MouseEvent): void {
+    if (this.bellOpen() && !this.bell()?.nativeElement.contains(event.target as Node)) this.bellOpen.set(false);
   }
 
   protected async openNotification(item: { id: string; isRead: boolean; link: string | null } & object): Promise<void> {

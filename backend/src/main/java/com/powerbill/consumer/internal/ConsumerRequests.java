@@ -44,6 +44,8 @@ final class ConsumerRequests {
     record StatusChange(@NotBlank @Pattern(regexp = STATUS) String status,
             @NotNull @PositiveOrZero Long version) {}
 
+    record AutoPay(@NotNull Boolean enabled, @NotNull @PositiveOrZero Long version) {}
+
     record NewMeter(@NotNull UUID premiseId,
             @NotBlank @Pattern(regexp = "DOMESTIC|COMMERCIAL|INDUSTRIAL") String connectionType,
             @NotNull @DecimalMin(value = "0", inclusive = false) @Digits(integer = 8, fraction = 4)

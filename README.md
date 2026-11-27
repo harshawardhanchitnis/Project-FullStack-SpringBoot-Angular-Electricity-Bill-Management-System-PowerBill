@@ -17,17 +17,31 @@ flowchart LR
     ML -.optional.-> LLM[Ollama / OpenAI / Gemini]
 ```
 
+## Screenshots
+
+| Customer dashboard (light) | Customer dashboard (dark) |
+| --- | --- |
+| ![Customer dashboard with projected bill, slab progress and a comparison with similar homes](docs/screenshots/customer-dashboard-light.png) | ![The same dashboard in the dark theme](docs/screenshots/customer-dashboard-dark.png) |
+| **Energy and what-if simulator** | **Energy Copilot** |
+| ![Usage heatmap, period comparison and the load-shift and rooftop solar simulator](docs/screenshots/energy-simulator.png) | ![The Copilot drawer answering why a bill changed, citing the customer's own figures](docs/screenshots/copilot-drawer.png) |
+
+![Executive overview with revenue, receivables aging, anomalies, SLA compliance and regional performance](docs/screenshots/executive-overview.png)
+
+Refresh them against a running demo stack with `CAPTURE_SCREENSHOTS=1 E2E_DEMO_PASSWORD=<DEMO_PASSWORD> npx playwright test screenshots`
+from `frontend`.
+
 ## What it does
 
 | Area | Highlights |
 | --- | --- |
-| Smart metering | Hourly TimescaleDB hypertable with continuous aggregates, VEE checks (load, export, voltage, power factor), CSV and Green Button ESPI import and export, estimation and audited corrections, and a 12-month AMI simulator with injected tamper, flatline and night-baseload scenarios |
+| Smart metering | Hourly TimescaleDB hypertable with continuous aggregates, VEE checks (load, export, voltage, power factor), CSV and Green Button ESPI import and export, estimation and audited corrections, staff VEE tools for inspecting flagged and missing hours, and a 12-month AMI simulator with injected tamper, flatline and night-baseload scenarios |
 | Tariff engine | Effective-dated, versioned plans with telescopic slabs, time-of-day windows, solar carry-forward or cash credit, fixed charge per kW, FAC, electricity duty and GST, all computed with `BigDecimal` to the paisa, plus a what-if simulator for load shifting and rooftop solar payback |
-| Billing and payments | Immutable invoices enforced by a database trigger, idempotent batch billing runs with dry-run preview, credit and debit notes, accrued late fees, a double-entry ledger whose journals must balance at commit, atomic multi-bill checkout with `Idempotency-Key`, an HMAC-SHA256 signed sandbox gateway, and PDF invoices and receipts with QR codes |
+| Billing and payments | Immutable invoices enforced by a database trigger, idempotent batch billing runs with dry-run preview, credit and debit notes, accrued late fees, a double-entry ledger whose journals must balance at commit, atomic multi-bill checkout with `Idempotency-Key`, auto-pay, a payment gateway interface with an HMAC-SHA256 signed sandbox, and PDF invoices and receipts with QR codes |
 | Support and outages | Complaint state machine with SLA deadlines and breach sweeps, public replies and internal notes, CSAT, and outage incidents targeted by pincode |
-| Notifications | Spring Modulith events drive in-app notifications, live Server-Sent Events and HTML email through Mailpit |
+| Notifications | Spring Modulith events drive in-app notifications, live Server-Sent Events fanned out across instances through Redis pub/sub, and HTML email through Mailpit |
 | Intelligence | Quantile gradient-boosting and Holt-Winters cycle forecasts priced through the real tariff engine, explainable anomaly detection (rules plus Isolation Forest), and an Energy Copilot and agent triage assistant whose numbers always come from the ledger |
-| Operations | Executive KPIs (billed vs collected, collection efficiency, aging, slab mix, anomalies, SLA compliance), a consumer 360° view, a tariff studio, RBAC for five roles and an append-only audit trail |
+| Customer insight | An anonymous comparison with similar homes (same connection type and load band, shown only when at least four peers exist), bill-shock warnings against a monthly budget, and CSV export of bills and payments |
+| Operations | Executive KPIs (billed vs collected, collection efficiency, aging, slab mix, anomalies, SLA compliance) with a regional loss-proxy and collection table, a consumer 360° view with contact, budget and meter changes, a tariff studio with a draft editor, a support desk with table and Kanban views, a Ctrl+K command palette, RBAC for five roles and an append-only audit trail with recorded state |
 
 ## Run locally
 
@@ -63,11 +77,11 @@ Optional profiles:
 
 | Component | Command | Current result |
 | --- | --- | --- |
-| Core API, from `backend` | `./mvnw verify` (`mvnw.cmd verify` on Windows) | 43 tests: Testcontainers integration suites, 26 tariff engine cases and the Spring Modulith boundary check; 85% line coverage (JaCoCo report in `target/site/jacoco`) |
-| ML service, from `ml-service` in a Python 3.12+ venv | `pip install -e '.[dev]'`, `ruff check .`, `pytest --cov=app` | 19 tests with 85% coverage, including forecast MAPE under 15%, recall of three injected anomaly scenarios and the copilot grounding guard |
-| Frontend, from `frontend` | `npm ci`, `npm run lint`, `npm test`, `npm run build` | Lint clean, unit tests pass, 458 kB initial bundle (94 kB gzipped) |
-| End-to-end, from `frontend` with the demo stack running | `E2E_DEMO_PASSWORD=<DEMO_PASSWORD> npm run e2e` | 14 Playwright journeys covering security headers, payments, Copilot, complaints, staff workflows and 375/768/1440 px layouts |
-| Load smoke | see [k6-smoke.js](tests/load/k6-smoke.js) | p95 of 22 ms with 0% errors at 25 virtual users on the customer read paths |
+| Core API, from `backend` | `./mvnw verify` (`mvnw.cmd verify` on Windows) | 52 tests: Testcontainers integration suites, unit tests for the AI service and error handling, 26 tariff engine cases and the Spring Modulith boundary check; 87% line coverage (JaCoCo report in `target/site/jacoco`) |
+| ML service, from `ml-service` in a Python 3.12+ venv | `pip install -e '.[dev]'`, `ruff check .`, `pytest --cov=app` | 75 tests with 91% coverage, including forecast MAPE under 15%, midnight IST alignment, recall of three injected anomaly scenarios and the copilot grounding guard |
+| Frontend, from `frontend` | `npm ci`, `npm run lint`, `npm test`, `npm run build` | Lint clean, 21 unit tests, 343 kB initial bundle (91 kB gzipped) with no budget warnings |
+| End-to-end, from `frontend` with the demo stack running | `E2E_DEMO_PASSWORD=<DEMO_PASSWORD> npm run e2e` | 22 Playwright journeys covering security headers, payments, Copilot, complaints, staff workflows, account switching, the command palette, VEE tools, the Kanban desk, auto-pay, and a clean console with no horizontal scroll at 375, 768 and 1440 px |
+| Load | see [k6-smoke.js](tests/load/k6-smoke.js); add `K6_PROFILE=mixed` for the mixed workload | Smoke, 25 virtual users: p95 of 9 ms with 0% errors over 7,410 requests. Mixed, 100 virtual users plus forecasts, Copilot chat and the executive overview: p95 of 10 ms (Copilot 35 ms) with 0% errors over 29,283 requests |
 
 ## Documentation
 

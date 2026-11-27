@@ -1,4 +1,4 @@
-import { Component, ElementRef, computed, effect, input, output, viewChild } from '@angular/core';
+import { Component, DestroyRef, ElementRef, computed, effect, inject, input, output, viewChild } from '@angular/core';
 import { LucideAlertCircle, LucideInbox, LucideRefreshCw, LucideX } from '@lucide/angular';
 import { humanize } from './format';
 
@@ -36,7 +36,10 @@ export class StatusBadge {
   selector: 'app-kpi',
   template: `
     <div class="card-pad h-full">
-      <p class="eyebrow">{{ label() }}</p>
+      <div class="flex items-start justify-between gap-3">
+        <p class="eyebrow">{{ label() }}</p>
+        <span class="-mt-1 inline-flex size-8 shrink-0 items-center justify-center rounded-lg empty:hidden" [class]="iconClass()"><ng-content select="[kpi-icon]" /></span>
+      </div>
       @if (loading()) {
         <div class="skeleton mt-3 h-8 w-32"></div>
         <div class="skeleton mt-2 h-4 w-40"></div>
@@ -58,6 +61,9 @@ export class KpiCard {
   readonly loading = input(false);
   protected readonly toneClass = computed(
     () => ({ ok: 'text-ok', warn: 'text-warn', bad: 'text-bad', muted: 'text-muted' })[this.tone()],
+  );
+  protected readonly iconClass = computed(
+    () => ({ ok: 'bg-ok-soft text-ok', warn: 'bg-warn-soft text-warn', bad: 'bg-bad-soft text-bad', muted: 'bg-brand-soft text-brand' })[this.tone()],
   );
 }
 
@@ -107,7 +113,7 @@ export class ErrorBanner {
   host: { '(document:keydown.escape)': 'onEscape()' },
   template: `
     @if (open()) {
-      <div class="fixed inset-0 z-40 bg-slate-950/45" aria-hidden="true" (click)="dismiss()"></div>
+      <div class="fixed inset-0 z-40 bg-slate-950/45 backdrop-blur-[2px]" aria-hidden="true" (click)="dismiss()"></div>
       <section
         #panel
         role="dialog"
@@ -140,6 +146,8 @@ export class ErrorBanner {
 })
 export class Dialog {
   private static counter = 0;
+  /** Open dialogs; the page behind stays scroll-locked until the last one closes. */
+  private static locks = 0;
   readonly open = input(false);
   readonly heading = input.required<string>();
   readonly subheading = input<string>();
@@ -148,17 +156,31 @@ export class Dialog {
   protected readonly headingId = `dialog-heading-${++Dialog.counter}`;
   private readonly panel = viewChild<ElementRef<HTMLElement>>('panel');
   private previous: Element | null = null;
+  private locked = false;
 
   constructor() {
     effect(() => {
       if (this.open()) {
+        this.lockScroll(true);
         this.previous = document.activeElement;
         queueMicrotask(() => this.panel()?.nativeElement.focus());
-      } else if (this.previous instanceof HTMLElement) {
-        this.previous.focus();
-        this.previous = null;
+      } else {
+        this.lockScroll(false);
+        if (this.previous instanceof HTMLElement) {
+          this.previous.focus();
+          this.previous = null;
+        }
       }
     });
+    inject(DestroyRef).onDestroy(() => this.lockScroll(false));
+  }
+
+  /** Uses a class rather than an inline style so the strict CSP still applies. */
+  private lockScroll(lock: boolean): void {
+    if (lock === this.locked) return;
+    this.locked = lock;
+    Dialog.locks += lock ? 1 : -1;
+    document.body.classList.toggle('overflow-hidden', Dialog.locks > 0);
   }
 
   /** Keeps keyboard focus inside the open dialog. */

@@ -23,9 +23,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.dao.DataAccessException;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -35,7 +32,7 @@ import tools.jackson.databind.JsonNode;
 @Service
 class AiService {
     private static final Logger LOG = LoggerFactory.getLogger(AiService.class);
-    private static final int AI_REQUESTS_PER_MINUTE = 20;
+    private static final int MAX_CONSECUTIVE_ML_FAILURES = 3;
     private final AccountDirectory accounts;
     private final MeterUsage usage;
     private final BillingLedger billing;
@@ -44,13 +41,12 @@ class AiService {
     private final TariffPricing pricing;
     private final ForecastService forecasts;
     private final MlClient ml;
-    private final StringRedisTemplate redis;
     private final ApplicationEventPublisher events;
     private final Counter detected;
 
     AiService(AccountDirectory accounts, MeterUsage usage, BillingLedger billing, SupportDirectory support,
             AnomalyRegistry anomalies, TariffPricing pricing, ForecastService forecasts, MlClient ml,
-            StringRedisTemplate redis, ApplicationEventPublisher events, MeterRegistry metrics) {
+            ApplicationEventPublisher events, MeterRegistry metrics) {
         this.accounts = accounts;
         this.usage = usage;
         this.billing = billing;
@@ -59,25 +55,8 @@ class AiService {
         this.pricing = pricing;
         this.forecasts = forecasts;
         this.ml = ml;
-        this.redis = redis;
         this.events = events;
         this.detected = Counter.builder("powerbill.anomalies.detected").register(metrics);
-    }
-
-    void throttle(UUID user) {
-        long minute = Instant.now().getEpochSecond() / 60;
-        String key = "gridiq:ai:limit:" + user + ":" + minute;
-        Long count;
-        try {
-            count = redis.opsForValue().increment(key);
-            redis.expire(key, Duration.ofSeconds(70));
-        } catch (DataAccessException error) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "The assistant is temporarily unavailable.");
-        }
-        if (count != null && count > AI_REQUESTS_PER_MINUTE) {
-            long retry = 60 - Instant.now().getEpochSecond() % 60;
-            throw new TooManyRequests(retry);
-        }
     }
 
     JsonNode chat(AccountDirectory.Account account, ServicePoint point, String message, List<Map<String, String>> history,
@@ -131,7 +110,7 @@ class AiService {
         }
         context.put("bills", bills);
         context.put("receivables", billing.receivables(account.id()));
-        var plan = pricing.applicablePlan(point.connectionType(), today.withDayOfMonth(1));
+        var plan = pricing.applicablePlan(point.tariffPlanId(), point.connectionType(), today.withDayOfMonth(1));
         context.put("tariff", Map.of("name", plan.name(), "slabs", plan.slabs(), "timeWindows", plan.windows(),
                 "fixedChargePerKw", plan.fixedChargePerKw(), "electricityDutyPct", plan.electricityDutyPct(),
                 "facPerKwh", plan.facPerKwh(), "lateFeeDailyPct", plan.lateFeeDailyPct(),
@@ -169,9 +148,15 @@ class AiService {
             return 0;
         }
         int recorded = 0;
+        int consecutiveFailures = 0;
         Instant end = LocalDate.now(ForecastService.INDIA).atStartOfDay(ForecastService.INDIA).toInstant();
         Instant start = end.minus(Duration.ofDays(45));
         for (ServicePoint point : accounts.billableServicePoints()) {
+            if (consecutiveFailures >= MAX_CONSECUTIVE_ML_FAILURES) {
+                // The ML service looks down; stop early and let the next scheduled scan retry every meter.
+                LOG.warn("Anomaly scan stopped after {} consecutive ML failures", consecutiveFailures);
+                break;
+            }
             var readings = usage.intervalReadings(point.meterId(), start, end).stream()
                     .filter(reading -> !reading.quality().equals("FLAGGED"))
                     .map(reading -> Map.of("start", reading.start().toString(), "importKwh", reading.importKwh(),
@@ -183,8 +168,11 @@ class AiService {
             var response = ml.post("/ml/v1/anomalies/detect", Map.of("meterId", point.meterId().toString(),
                     "solarNetMetering", point.solarNetMetering(), "readings", readings), correlationId);
             if (response.isEmpty()) {
-                return recorded;
+                // One failed call must not skip the remaining meters.
+                consecutiveFailures++;
+                continue;
             }
+            consecutiveFailures = 0;
             for (JsonNode anomaly : response.get().path("anomalies")) {
                 var reasons = new ArrayList<AnomalyRegistry.Reason>();
                 anomaly.path("reasons").forEach(reason -> reasons.add(new AnomalyRegistry.Reason(
@@ -203,8 +191,11 @@ class AiService {
 
     /** Publishes bill-shock alerts for accounts whose projected bill exceeds the budget. */
     int budgetAlerts(String correlationId) {
+        return budgetAlerts(correlationId, LocalDate.now(ForecastService.INDIA));
+    }
+
+    int budgetAlerts(String correlationId, LocalDate today) {
         int alerts = 0;
-        LocalDate today = LocalDate.now(ForecastService.INDIA);
         for (ServicePoint point : accounts.billableServicePoints()) {
             var account = point.account();
             ForecastService.Forecast forecast;
@@ -215,23 +206,29 @@ class AiService {
                 LOG.debug("Skipped a forecast ({})", error.getClass().getSimpleName());
                 continue;
             }
-            if (account.monthlyBudgetInr() == null || account.monthlyBudgetInr().signum() == 0
-                    || today.getDayOfMonth() < 5) {
+            // Early in the cycle a projection is too noisy to alert on.
+            if (today.getDayOfMonth() < 5) {
                 continue;
             }
             try {
                 BigDecimal projected = forecast.projectedBillInr().p50();
+                BigDecimal budget = account.monthlyBudgetInr();
+                boolean hasBudget = budget != null && budget.signum() > 0;
                 String reason = null;
-                if (projected.compareTo(account.monthlyBudgetInr()) > 0) {
-                    reason = "That is above your monthly budget of ₹" + account.monthlyBudgetInr().toPlainString() + ".";
+                String kind = null;
+                if (hasBudget && projected.compareTo(budget) > 0) {
+                    reason = "That is above your monthly budget of ₹" + budget.toPlainString() + ".";
+                    kind = "BUDGET";
                 } else if (forecast.daysToNextSlab() != null && forecast.daysToNextSlab() <= 5) {
+                    // Slab warnings do not need a budget; the notification module still honours the alert preference.
                     reason = "You are likely to enter the next tariff slab at " + forecast.nextSlabAtKwh()
-                            .stripTrailingZeros().toPlainString() + " kWh within " + forecast.daysToNextSlab() + " days.";
+                            .stripTrailingZeros().toPlainString() + " kWh " + whenText(forecast.daysToNextSlab()) + ".";
+                    kind = "SLAB";
                 }
                 if (reason != null) {
                     events.publishEvent(new AnalyticsEvents.BudgetAlert(account.userId(), account.id(),
                             point.meterId(), point.meterSerial(), forecast.cycle(), projected,
-                            account.monthlyBudgetInr(), reason));
+                            hasBudget ? budget : null, reason, kind));
                     alerts++;
                 }
             } catch (RuntimeException error) {
@@ -239,6 +236,11 @@ class AiService {
             }
         }
         return alerts;
+    }
+
+    /** Phrases a forecast day offset: 0 is today, 1 is tomorrow, otherwise "in N days". */
+    static String whenText(int days) {
+        return days <= 0 ? "today" : days == 1 ? "tomorrow" : "in " + days + " days";
     }
 
     /** Sends the restoration estimate as an ISO-8601 instant only when one is known; the ML service formats it. */
@@ -252,17 +254,4 @@ class AiService {
         return item;
     }
 
-    private static final class TooManyRequests extends ResponseStatusException {
-        private final HttpHeaders headers = new HttpHeaders();
-
-        TooManyRequests(long seconds) {
-            super(HttpStatus.TOO_MANY_REQUESTS, "Too many assistant requests. Try again shortly.");
-            headers.set(HttpHeaders.RETRY_AFTER, Long.toString(seconds));
-        }
-
-        @Override
-        public HttpHeaders getHeaders() {
-            return headers;
-        }
-    }
 }

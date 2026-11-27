@@ -8,6 +8,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 import com.powerbill.common.PdfKit;
@@ -48,14 +49,22 @@ class PaymentController {
     private final PaymentSettlement settlement;
     private final PaymentStore store;
     private final AccountDirectory accounts;
+    private final AutoPayService autoPay;
 
     PaymentController(PaymentService payments, SandboxGateway sandbox, PaymentSettlement settlement, PaymentStore store,
-            AccountDirectory accounts) {
+            AccountDirectory accounts, AutoPayService autoPay) {
         this.payments = payments;
         this.sandbox = sandbox;
         this.settlement = settlement;
         this.store = store;
         this.accounts = accounts;
+        this.autoPay = autoPay;
+    }
+
+    /** Runs the auto-pay sweep now instead of waiting for the daily schedule (billing officers and admins). */
+    @PostMapping("/ops/payments/auto-pay/run")
+    Map<String, Integer> runAutoPay() {
+        return Map.of("settledBills", autoPay.run());
     }
 
     @PostMapping("/payments/checkout")
@@ -130,7 +139,7 @@ class PaymentController {
             details.put("Receipt number", payment.paymentReference());
             details.put("Paid on", STAMP.format(payment.completedAt().toInstant()));
             details.put("Consumer", account.fullName() + " · " + account.consumerNumber());
-            details.put("Method", payment.method().replace('_', ' '));
+            details.put("Method", payment.paymentMethod().replace('_', ' '));
             details.put("Gateway reference", payment.gatewayPaymentId() == null ? "" : payment.gatewayPaymentId());
             details.put("Signature verified", payment.webhookVerified() ? "Yes" : "No");
             page.details(details);

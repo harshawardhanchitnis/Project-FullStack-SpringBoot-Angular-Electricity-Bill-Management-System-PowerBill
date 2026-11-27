@@ -1,11 +1,13 @@
 import { HttpClient, HttpHeaders } from '@angular/common/http';
-import { Component, computed, effect, inject, input, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { LucideDownload, LucidePlay } from '@lucide/angular';
+import { Router } from '@angular/router';
+import { LucideDownload, LucidePlay, LucideX } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { AuthStore } from '../../core/auth';
-import { BillDetail, BillSummary, Page, Payment } from '../../core/models';
+import { BillDetail, BillSummary, ConsumerDetails, Page, Payment } from '../../core/models';
 import { Toasts, problemMessage } from '../../core/ui-state';
+import { exportCsv } from '../../shared/csv';
 import { download, idempotencyKey } from '../../shared/download';
 import { FORMAT_PIPES } from '../../shared/format';
 import { Dialog, EmptyState, ErrorBanner, KpiCard, Pager, StatusBadge } from '../../shared/ui';
@@ -33,7 +35,8 @@ interface RunResult {
 type Tab = 'bills' | 'runs' | 'payments';
 
 @Component({
-  imports: [FormsModule, Dialog, EmptyState, ErrorBanner, KpiCard, Pager, StatusBadge, ...FORMAT_PIPES, LucideDownload, LucidePlay],
+  imports: [FormsModule, Dialog, EmptyState, ErrorBanner, KpiCard, Pager, StatusBadge, ...FORMAT_PIPES, LucideDownload, LucidePlay,
+    LucideX],
   template: `
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
@@ -63,7 +66,16 @@ type Tab = 'bills' | 'runs' | 'payments';
           <label class="sr-only" for="bill-period">Period</label>
           <input id="bill-period" class="input w-auto" type="month" name="period" [(ngModel)]="periodFilter" />
           <button type="submit" class="btn-secondary">Filter</button>
+          <button type="button" class="btn-secondary btn-sm ml-auto self-center" [disabled]="!bills()?.content?.length" (click)="exportBills()">
+            <svg lucideDownload [size]="14" aria-hidden="true"></svg> Export CSV</button>
         </form>
+        @if (accountId()) {
+          <p class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <span class="badge bg-brand-soft text-brand">Account: {{ accountLabel() ?? accountId() }}</span>
+            <button type="button" class="btn-ghost btn-sm" (click)="clearAccount()" aria-label="Clear the account filter">
+              <svg lucideX [size]="14" aria-hidden="true"></svg> Clear</button>
+          </p>
+        }
         <div class="table-wrap mt-4">
           <table class="table">
             <caption class="sr-only">Bills</caption>
@@ -129,7 +141,11 @@ type Tab = 'bills' | 'runs' | 'payments';
         </div>
       }
       @case ('payments') {
-        <div class="table-wrap mt-5">
+        <div class="mt-5 flex justify-end">
+          <button type="button" class="btn-secondary btn-sm" [disabled]="!payments()?.content?.length" (click)="exportPayments()">
+            <svg lucideDownload [size]="14" aria-hidden="true"></svg> Export CSV</button>
+        </div>
+        <div class="table-wrap mt-3">
           <table class="table">
             <caption class="sr-only">Payments</caption>
             <thead><tr><th>Reference</th><th>Created</th><th>Method</th><th>Gateway</th><th class="text-right">Amount</th><th>Webhook</th><th>Status</th></tr></thead>
@@ -185,6 +201,9 @@ type Tab = 'bills' | 'runs' | 'payments';
 export class BillingOps {
   readonly accountId = input<string>();
   private readonly http = inject(HttpClient);
+  private readonly router = inject(Router);
+  /** Consumer name and number for the account filter pill; falls back to the raw ID. */
+  protected readonly accountLabel = signal<string | null>(null);
   private readonly toasts = inject(Toasts);
   private readonly auth = inject(AuthStore);
   protected readonly canWrite = computed(() => ['BILLING_OFFICER', 'SUPER_ADMIN'].includes(this.auth.role() ?? ''));
@@ -206,10 +225,59 @@ export class BillingOps {
   private runKey = idempotencyKey();
 
   constructor() {
+    // Tracks only the accountId route input; tab and page changes call reload() themselves, once.
     effect(() => {
-      this.accountId();
-      void this.reload();
+      const account = this.accountId();
+      untracked(() => {
+        this.page.set(0);
+        void this.reload();
+        void this.resolveAccount(account);
+      });
     });
+  }
+
+  private async resolveAccount(id: string | undefined): Promise<void> {
+    this.accountLabel.set(null);
+    if (!id) return;
+    try {
+      const details = await firstValueFrom(this.http.get<ConsumerDetails>(`/api/v1/ops/consumers/${id}`));
+      if (this.accountId() === id) this.accountLabel.set(`${details.account.fullName} · ${details.account.consumerNumber}`);
+    } catch {
+      // The pill keeps showing the ID.
+    }
+  }
+
+  protected clearAccount(): void {
+    void this.router.navigate([], { queryParams: { accountId: null }, queryParamsHandling: 'merge' });
+  }
+
+  protected exportBills(): void {
+    const period = this.periodFilter ? `-${this.periodFilter}` : '';
+    exportCsv(`gridiq-ops-bills${period}-page-${this.page() + 1}.csv`, this.bills()?.content ?? [], [
+      { header: 'Bill number', value: (b) => b.billNumber },
+      { header: 'Account ID', value: (b) => b.consumerAccountId },
+      { header: 'Meter', value: (b) => b.meterSerial },
+      { header: 'Period', value: (b) => b.period },
+      { header: 'Net billable kWh', value: (b) => b.netBillableKwh },
+      { header: 'Total (INR)', value: (b) => b.totalAmount },
+      { header: 'Paid (INR)', value: (b) => b.paidAmount },
+      { header: 'Due now (INR)', value: (b) => b.totalDue },
+      { header: 'Due date', value: (b) => b.dueDate },
+      { header: 'Status', value: (b) => b.status },
+    ]);
+  }
+
+  protected exportPayments(): void {
+    exportCsv(`gridiq-ops-payments-page-${this.page() + 1}.csv`, this.payments()?.content ?? [], [
+      { header: 'Reference', value: (p) => p.paymentReference },
+      { header: 'Created', value: (p) => p.createdAt },
+      { header: 'Completed', value: (p) => p.completedAt },
+      { header: 'Method', value: (p) => p.paymentMethod },
+      { header: 'Gateway', value: (p) => p.gatewayProvider },
+      { header: 'Amount (INR)', value: (p) => p.amount },
+      { header: 'Webhook verified', value: (p) => p.webhookVerified },
+      { header: 'Status', value: (p) => p.status },
+    ]);
   }
 
   protected pad(value: number): string {

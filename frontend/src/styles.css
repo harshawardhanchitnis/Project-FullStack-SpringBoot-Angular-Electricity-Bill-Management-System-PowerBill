@@ -136,7 +136,7 @@ td,
     @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold whitespace-nowrap;
   }
   .table-wrap {
-    @apply overflow-x-auto rounded-xl border border-line bg-surface;
+    @apply relative overflow-x-auto rounded-xl border border-line bg-surface;
   }
   .table {
     @apply w-full min-w-[640px] text-left text-sm;

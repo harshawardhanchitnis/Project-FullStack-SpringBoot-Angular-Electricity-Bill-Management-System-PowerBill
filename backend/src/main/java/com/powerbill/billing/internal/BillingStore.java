@@ -265,6 +265,24 @@ class BillingStore {
                 """).query(com.powerbill.billing.BillingStatistics.AgingBucket.class).list();
     }
 
+    List<com.powerbill.billing.BillingStatistics.MeterBilling> billingByMeter(java.time.YearMonth from,
+            java.time.YearMonth to) {
+        return db.sql("""
+                SELECT meter_id,
+                    coalesce(sum(net_billable_kwh) FILTER (WHERE in_period), 0) AS billed_kwh,
+                    coalesce(sum(total_amount + debit_note_total - credit_note_total) FILTER (WHERE in_period), 0)
+                        AS billed_inr,
+                    coalesce(sum(greatest(paid_amount - late_fee, 0)) FILTER (WHERE in_period), 0) AS collected_inr,
+                    coalesce(sum(greatest(total_amount + debit_note_total - credit_note_total - (paid_amount - late_fee), 0))
+                        FILTER (WHERE status IN ('ISSUED','PARTIALLY_PAID','OVERDUE','DISPUTED')
+                            AND due_date < CAST(now() AT TIME ZONE 'Asia/Kolkata' AS date)), 0) AS overdue_inr
+                FROM (SELECT b.*, make_date(billing_year, billing_month, 1) BETWEEN ? AND ? AS in_period
+                      FROM bills b WHERE status <> 'VOID') x
+                GROUP BY meter_id
+                """).params(from.atDay(1), to.atDay(1))
+                .query(com.powerbill.billing.BillingStatistics.MeterBilling.class).list();
+    }
+
     List<com.powerbill.billing.BillingStatistics.SlabBand> slabs(int months) {
         return db.sql("""
                 WITH bands(band, ord, low, high) AS (

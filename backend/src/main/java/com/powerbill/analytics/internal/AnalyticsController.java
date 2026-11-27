@@ -39,12 +39,15 @@ class AnalyticsController {
     private final ForecastService forecasts;
     private final AiService ai;
     private final AccountDirectory accounts;
+    private final AiThrottle throttle;
 
-    AnalyticsController(AnalyticsService analytics, ForecastService forecasts, AiService ai, AccountDirectory accounts) {
+    AnalyticsController(AnalyticsService analytics, ForecastService forecasts, AiService ai, AccountDirectory accounts,
+            AiThrottle throttle) {
         this.analytics = analytics;
         this.forecasts = forecasts;
         this.ai = ai;
         this.accounts = accounts;
+        this.throttle = throttle;
     }
 
     @GetMapping("/analytics/consumer/overview")
@@ -57,6 +60,7 @@ class AnalyticsController {
     @GetMapping("/ai/forecast/{meterId}")
     ForecastService.Forecast forecast(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID meterId,
             HttpServletRequest request) {
+        throttle.acquire("forecast", UUID.fromString(jwt.getSubject()), AiThrottle.FORECAST_PER_MINUTE);
         var account = self(jwt);
         return forecasts.forecast(meter(account, meterId), today(), RequestContext.from(request).correlationId());
     }
@@ -64,7 +68,7 @@ class AnalyticsController {
     @PostMapping("/ai/copilot/chat")
     JsonNode chat(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody Chat input, HttpServletRequest request) {
         UUID user = UUID.fromString(jwt.getSubject());
-        ai.throttle(user);
+        throttle.acquire("assistant", user, AiThrottle.ASSISTANT_PER_MINUTE);
         var account = self(jwt);
         return ai.chat(account, meter(account, input.meterId()), input.message().strip(), input.history(),
                 RequestContext.from(request).correlationId());
@@ -77,7 +81,7 @@ class AnalyticsController {
 
     @PostMapping("/ops/ai/complaints/{id}/triage")
     JsonNode triage(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id, HttpServletRequest request) {
-        ai.throttle(UUID.fromString(jwt.getSubject()));
+        throttle.acquire("assistant", UUID.fromString(jwt.getSubject()), AiThrottle.ASSISTANT_PER_MINUTE);
         return ai.triage(id, RequestContext.from(request).correlationId());
     }
 

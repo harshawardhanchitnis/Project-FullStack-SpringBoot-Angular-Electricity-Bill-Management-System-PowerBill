@@ -42,6 +42,22 @@ test('a field engineer works the anomaly queue', async ({ page }) => {
   await expect(page).toHaveURL(/\/ops\/dashboard$/);
 });
 
+for (const width of [375, 768, 1440]) {
+  test(`operations pages fit a ${width}px viewport with a clean console`, async ({ page }) => {
+    const errors = watchConsole(page);
+    await page.setViewportSize({ width, height: 900 });
+    await signIn(page, 'admin', /\/ops\/dashboard$/);
+    await expect(page.getByRole('heading', { name: /Regional performance/ })).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    for (const path of ['/ops/consumers', '/ops/billing', '/ops/tariffs', '/ops/anomalies', '/ops/support', '/ops/audit', '/ops/users']) {
+      await page.goto(path);
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
 test('a super administrator audits activity at phone width', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 900 });
   await signIn(page, 'admin', /\/ops\/dashboard$/);

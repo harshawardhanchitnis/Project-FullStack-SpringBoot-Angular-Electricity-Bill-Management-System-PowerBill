@@ -1,23 +1,28 @@
 import { HttpClient } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { LucidePlus } from '@lucide/angular';
+import { LucideDownload, LucidePlus } from '@lucide/angular';
 import { firstValueFrom } from 'rxjs';
 import { AuthStore } from '../../core/auth';
 import { Page } from '../../core/models';
 import { Toasts, problemMessage } from '../../core/ui-state';
-import { FORMAT_PIPES } from '../../shared/format';
+import { FORMAT_PIPES, humanize } from '../../shared/format';
 import { Dialog, EmptyState, ErrorBanner, Pager, StatusBadge } from '../../shared/ui';
+import { ConfirmService } from '../../shared/confirm';
+import { exportCsv } from '../../shared/csv';
 
 interface AuditEntry {
   id: number;
   actorUserId: string | null;
+  actorName: string | null;
+  actorEmail: string | null;
   actorRole: string | null;
   action: string;
   entityType: string;
   entityId: string | null;
   correlationId: string | null;
   createdAt: string;
+  afterState: unknown;
 }
 
 interface UserRow {
@@ -33,13 +38,19 @@ interface UserRow {
 }
 
 @Component({
-  imports: [FormsModule, EmptyState, ErrorBanner, Pager, ...FORMAT_PIPES],
+  imports: [FormsModule, Dialog, EmptyState, ErrorBanner, Pager, ...FORMAT_PIPES, LucideDownload],
   template: `
-    <h1 class="h-page">Audit trail</h1>
-    <p class="mt-1 text-sm text-muted">Append-only record of every security, financial and administrative action.</p>
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h1 class="h-page">Audit trail</h1>
+        <p class="mt-1 text-sm text-muted">Append-only record of every security, financial and administrative action. Select a row for details.</p>
+      </div>
+      <button type="button" class="btn-secondary btn-sm" [disabled]="!entries()?.content?.length" (click)="exportPage()">
+        <svg lucideDownload [size]="15" aria-hidden="true"></svg> Export page (CSV)</button>
+    </div>
     <form class="mt-5 flex flex-wrap gap-2" role="search" (ngSubmit)="load(0)">
       <label class="sr-only" for="audit-q">Filter</label>
-      <input id="audit-q" class="input w-72" name="q" [(ngModel)]="query" placeholder="Action, entity or correlation ID" />
+      <input id="audit-q" class="input w-full sm:w-72" name="q" [(ngModel)]="query" placeholder="Action, entity or correlation ID" />
       <button type="submit" class="btn-secondary">Filter</button>
     </form>
     @if (error()) { <div class="mt-4"><app-error [message]="error()!" (retry)="load(page())" /></div> }
@@ -49,11 +60,12 @@ interface UserRow {
         <thead><tr><th>Time</th><th>Action</th><th>Entity</th><th>Actor</th><th>Correlation ID</th></tr></thead>
         <tbody>
           @for (entry of entries()?.content ?? []; track entry.id) {
-            <tr>
+            <tr class="cursor-pointer hover:bg-sunken" tabindex="0" (click)="selected.set(entry)" (keydown.enter)="selected.set(entry)">
               <td class="whitespace-nowrap">{{ entry.createdAt | moment }}</td>
               <td class="font-medium">{{ entry.action | humanize }}</td>
               <td>{{ entry.entityType | humanize }}<span class="block num text-xs text-faint">{{ entry.entityId }}</span></td>
-              <td>{{ (entry.actorRole ?? 'System') | humanize }}<span class="block num text-xs text-faint">{{ entry.actorUserId }}</span></td>
+              <td>{{ entry.actorName ?? ((entry.actorRole ?? 'System') | humanize) }}
+                <span class="block text-xs text-faint">{{ entry.actorName ? (entry.actorRole | humanize) : entry.actorUserId }}</span></td>
               <td class="num text-xs text-muted">{{ entry.correlationId }}</td>
             </tr>
           } @empty { <tr><td colspan="5"><app-empty title="No audit entries" /></td></tr> }
@@ -61,6 +73,26 @@ interface UserRow {
       </table>
     </div>
     <app-pager [page]="page()" [size]="25" [total]="entries()?.totalElements ?? 0" (pageChange)="load($event)" />
+
+    <app-dialog [open]="!!selected()" [heading]="selected() ? label(selected()!.action) : ''"
+                [subheading]="selected() ? (selected()!.createdAt | moment) : ''" (closed)="selected.set(null)">
+      @if (selected(); as entry) {
+        <dl class="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[9rem_1fr]">
+          <dt class="text-muted">Actor</dt>
+          <dd>{{ entry.actorName ?? 'System' }}@if (entry.actorEmail) { <span class="block text-xs text-faint">{{ entry.actorEmail }}</span> }</dd>
+          <dt class="text-muted">Role</dt><dd>{{ (entry.actorRole ?? 'System') | humanize }}</dd>
+          <dt class="text-muted">Entity</dt>
+          <dd>{{ entry.entityType | humanize }}<span class="block num text-xs text-faint wrap-anywhere">{{ entry.entityId ?? '—' }}</span></dd>
+          <dt class="text-muted">Correlation ID</dt><dd class="num text-xs wrap-anywhere">{{ entry.correlationId ?? '—' }}</dd>
+        </dl>
+        <h3 class="h-section mt-5">Recorded state</h3>
+        @if (entry.afterState !== null && entry.afterState !== undefined) {
+          <pre class="mt-2 max-h-80 overflow-auto rounded-md bg-sunken p-3 text-xs leading-relaxed">{{ pretty(entry.afterState) }}</pre>
+        } @else {
+          <p class="mt-1 text-sm text-muted">This action records no state snapshot.</p>
+        }
+      }
+    </app-dialog>
   `,
 })
 export class AuditTrail {
@@ -68,10 +100,32 @@ export class AuditTrail {
   protected readonly entries = signal<Page<AuditEntry> | null>(null);
   protected readonly page = signal(0);
   protected readonly error = signal<string | null>(null);
+  protected readonly selected = signal<AuditEntry | null>(null);
   protected query = '';
 
   constructor() {
     void this.load(0);
+  }
+
+  protected label(action: string): string {
+    return humanize(action);
+  }
+
+  protected pretty(state: unknown): string {
+    return JSON.stringify(state, null, 2);
+  }
+
+  protected exportPage(): void {
+    exportCsv(`gridiq-audit-page-${this.page() + 1}.csv`, this.entries()?.content ?? [], [
+      { header: 'Time', value: (entry) => entry.createdAt },
+      { header: 'Action', value: (entry) => entry.action },
+      { header: 'Entity type', value: (entry) => entry.entityType },
+      { header: 'Entity ID', value: (entry) => entry.entityId },
+      { header: 'Actor', value: (entry) => entry.actorName ?? 'System' },
+      { header: 'Actor email', value: (entry) => entry.actorEmail },
+      { header: 'Actor role', value: (entry) => entry.actorRole },
+      { header: 'Correlation ID', value: (entry) => entry.correlationId },
+    ]);
   }
 
   async load(page: number): Promise<void> {
@@ -152,7 +206,7 @@ export class AuditTrail {
         <div><label class="label" for="s-password">Temporary password</label><input id="s-password" class="input" type="password" name="password" [(ngModel)]="draft.temporaryPassword" minlength="12" autocomplete="new-password" required /></div>
         @if (formError()) { <p role="alert" class="rounded-lg bg-bad-soft p-3 text-sm">{{ formError() }}</p> }
       </form>
-      <div dialog-footer class="flex justify-end gap-2 border-t border-line p-4">
+      <div dialog-footer class="empty:hidden flex justify-end gap-2 border-t border-line p-4">
         <button type="button" class="btn-secondary" (click)="createOpen.set(false)">Cancel</button>
         <button type="submit" form="staff-form" class="btn-primary" [disabled]="busy()">Create</button>
       </div>
@@ -163,6 +217,7 @@ export class StaffAccess {
   protected readonly auth = inject(AuthStore);
   private readonly http = inject(HttpClient);
   private readonly toasts = inject(Toasts);
+  private readonly confirm = inject(ConfirmService);
   protected readonly roles = ['BILLING_OFFICER', 'SUPPORT_AGENT', 'FIELD_ENGINEER', 'SUPER_ADMIN'];
   protected readonly users = signal<Page<UserRow> | null>(null);
   protected readonly page = signal(0);
@@ -191,6 +246,19 @@ export class StaffAccess {
   }
 
   protected async change(user: UserRow, change: { role?: string; status?: string }): Promise<void> {
+    const disabling = change.status === 'DISABLED';
+    const confirmed = await this.confirm.ask(change.role
+      ? { title: `Change ${user.fullName}'s role?`,
+          message: `${user.fullName} becomes ${humanize(change.role)} and is signed out of every session. The change is audited.`,
+          confirmLabel: 'Change role' }
+      : { title: `${disabling ? 'Disable' : 'Enable'} ${user.fullName}?`,
+          message: disabling ? `${user.fullName} is signed out everywhere and can no longer sign in. The change is audited.`
+            : `${user.fullName} can sign in again. The change is audited.`,
+          confirmLabel: disabling ? 'Disable account' : 'Enable account', tone: disabling ? 'danger' : 'default' });
+    if (!confirmed) {
+      await this.load(this.page()); // resets the role select to the saved value
+      return;
+    }
     try {
       await firstValueFrom(this.http.patch(`/api/v1/ops/users/${user.id}`, { ...change, sessionVersion: user.sessionVersion }));
       this.toasts.success(`${user.fullName} updated and signed out of existing sessions.`);

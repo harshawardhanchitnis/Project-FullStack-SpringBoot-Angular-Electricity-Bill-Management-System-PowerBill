@@ -60,7 +60,7 @@ class SecurityTokens {
 
     @Bean
     JwtDecoder jwtDecoder(SecretKey gridiqSigningKey, IdentityStore identities, SessionRevocations revocations,
-            Environment environment) {
+            AuthStateCache states, Environment environment) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(gridiqSigningKey)
                 .macAlgorithm(MacAlgorithm.HS256).build();
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
@@ -82,11 +82,12 @@ class SecurityTokens {
                     if (!(version instanceof Number sessionVersion) || revocations.contains(family)) {
                         return invalid();
                     }
-                    return identities.byId(userId, false)
+                    // Both checks are served from Redis when cached; changes to them evict the entries.
+                    return states.user(userId, () -> identities.byId(userId, false).map(AuthStateCache.State::of))
                             .filter(user -> canAuthenticate(user, environment)
                                     && user.sessionVersion() == sessionVersion.intValue()
                                     && user.role().equals(jwt.getClaimAsString("role")))
-                            .filter(user -> identities.activeFamily(userId, family))
+                            .filter(user -> states.familyActive(family, () -> identities.activeFamily(userId, family)))
                             .map(user -> OAuth2TokenValidatorResult.success())
                             .orElseGet(SecurityTokens::invalid);
                 }));
@@ -119,7 +120,11 @@ class SecurityTokens {
     }
 
     static boolean canAuthenticate(IdentityStore.User user, Environment environment) {
-        return user.status().equals("ACTIVE") && (!user.email().endsWith(DEMO_DOMAIN)
+        return canAuthenticate(AuthStateCache.State.of(user), environment);
+    }
+
+    static boolean canAuthenticate(AuthStateCache.State user, Environment environment) {
+        return user.status().equals("ACTIVE") && (!user.demo()
                 || (environment.acceptsProfiles(Profiles.of("dev & !prod"))
                     && environment.getProperty("gridiq.demo.enabled", Boolean.class, false)));
     }

@@ -36,17 +36,20 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 class PaymentService {
     static final Duration CHECKOUT_TTL = Duration.ofMinutes(30);
-    private static final String METHODS = "UPI|CREDIT_CARD|DEBIT_CARD|NET_BANKING";
+    /** Methods a customer can choose; AUTO_PAY is used only by the auto-pay service. */
+    private static final String METHODS = "UPI|CREDIT_CARD|DEBIT_CARD|NET_BANKING|AUTO_PAY";
     private final PaymentStore store;
     private final BillingLedger billing;
     private final AccountDirectory accounts;
+    private final PaymentGateways gateways;
     private final ApplicationEventPublisher events;
 
-    PaymentService(PaymentStore store, BillingLedger billing, AccountDirectory accounts,
+    PaymentService(PaymentStore store, BillingLedger billing, AccountDirectory accounts, PaymentGateways gateways,
             ApplicationEventPublisher events) {
         this.store = store;
         this.billing = billing;
         this.accounts = accounts;
+        this.gateways = gateways;
         this.events = events;
     }
 
@@ -76,8 +79,9 @@ class PaymentService {
         BigDecimal amount = payables.stream().map(BillingLedger.Payable::totalDue).reduce(ZERO, BigDecimal::add);
         UUID id = UUID.randomUUID();
         String reference = "PAY-" + token(12);
-        var transaction = new PaymentStore.Transaction(id, reference, key, hash, account.id(), actor, "SANDBOX",
-                "sbx_order_" + token(16), null, method, amount, "INR", "INITIATED", null, false,
+        var gateway = gateways.checkout();
+        var transaction = new PaymentStore.Transaction(id, reference, key, hash, account.id(), actor, gateway.provider(),
+                gateway.createOrder(id, amount, "INR"), null, method, amount, "INR", "INITIATED", null, false,
                 OffsetDateTime.ofInstant(now.plus(CHECKOUT_TTL), ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(now, ZoneOffset.UTC), null, 0);
         store.insert(transaction);
@@ -123,9 +127,9 @@ class PaymentService {
 
     record Checkout(Payment payment, boolean replayed) {}
 
-    record Payment(UUID id, String paymentReference, String status, BigDecimal amount, String currency, String method,
-            String gatewayProvider, String gatewayOrderId, String gatewayPaymentId, boolean webhookVerified,
-            String failureReason, OffsetDateTime createdAt, OffsetDateTime expiresAt, OffsetDateTime completedAt,
+    record Payment(UUID id, String paymentReference, String status, BigDecimal amount, String currency,
+            String paymentMethod, String gatewayProvider, String gatewayOrderId, String gatewayPaymentId,
+            boolean webhookVerified, String failureReason, OffsetDateTime createdAt, OffsetDateTime expiresAt, OffsetDateTime completedAt,
             List<PaymentStore.Allocation> allocations) {}
 }
 
@@ -136,19 +140,19 @@ class PaymentSettlement {
     private final PaymentService payments;
     private final BillingLedger billing;
     private final AccountDirectory accounts;
-    private final WebhookSigner signer;
+    private final PaymentGateways gateways;
     private final ObjectMapper json;
     private final ApplicationEventPublisher events;
     private final Counter settled;
     private final Counter settledAmount;
 
     PaymentSettlement(PaymentStore store, PaymentService payments, BillingLedger billing, AccountDirectory accounts,
-            WebhookSigner signer, ObjectMapper json, ApplicationEventPublisher events, MeterRegistry metrics) {
+            PaymentGateways gateways, ObjectMapper json, ApplicationEventPublisher events, MeterRegistry metrics) {
         this.store = store;
         this.payments = payments;
         this.billing = billing;
         this.accounts = accounts;
-        this.signer = signer;
+        this.gateways = gateways;
         this.json = json;
         this.events = events;
         this.settled = Counter.builder("powerbill.payments.settled").register(metrics);
@@ -157,10 +161,8 @@ class PaymentSettlement {
 
     @Transactional
     PaymentService.Payment handle(String provider, String body, String signature) {
-        if (!provider.equals("sandbox")) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Unknown payment provider.");
-        }
-        if (body.length() > 20_000 || !signer.verify(body, signature, Instant.now())) {
+        var gateway = gateways.byWebhook(provider);
+        if (body.length() > 20_000 || !gateway.verify(body, signature, Instant.now())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The webhook signature is invalid.");
         }
         JsonNode event;

@@ -16,10 +16,6 @@ spring:
       password: ${REDIS_PASSWORD:${redis-password:}}
       connect-timeout: 2s
       timeout: 2s
-  jpa:
-    open-in-view: false
-    hibernate:
-      ddl-auto: validate
   flyway:
     default-schema: gridiq
   mail:
