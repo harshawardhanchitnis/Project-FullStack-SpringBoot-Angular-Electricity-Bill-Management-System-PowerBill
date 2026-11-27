@@ -13,11 +13,12 @@ import com.powerbill.common.RequestContext;
 import com.powerbill.consumer.AccountDirectory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.modulith.events.ApplicationModuleListener;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -46,7 +47,13 @@ class AutoPayService {
         this.perBill.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    @ApplicationModuleListener
+    /**
+     * Not {@code @ApplicationModuleListener}: that opens a transaction around this method, and {@link #settle} opens
+     * its own per bill, so each charge would hold two pooled connections and a busy pool could starve it. Spring
+     * Modulith still records and completes the event publication for this transactional listener.
+     */
+    @Async
+    @TransactionalEventListener
     void on(BillingEvents.BillIssued event) {
         if (accounts.autoPayEnabled(event.accountId())) {
             settle(event.accountId(), event.billId());
@@ -95,8 +102,10 @@ class AutoPayService {
                 return payment.status().equals("SUCCEEDED");
             }));
         } catch (RuntimeException skipped) {
-            // Already paid, a payment in progress, or a gateway decline: nothing was committed for this bill.
-            LOG.debug("Auto-pay skipped a bill ({})", skipped.getClass().getSimpleName());
+            // A payment in progress, a gateway decline or a database error: nothing was committed for this bill, and
+            // the daily sweep tries again. Logged at WARN because an unexplained missed charge is a support case.
+            LOG.warn("Auto-pay did not settle bill {} ({}: {})", billId, skipped.getClass().getSimpleName(),
+                    skipped.getMessage());
             return false;
         }
     }

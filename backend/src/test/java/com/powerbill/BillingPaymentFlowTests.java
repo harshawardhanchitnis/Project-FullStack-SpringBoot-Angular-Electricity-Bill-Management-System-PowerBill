@@ -162,7 +162,11 @@ class BillingPaymentFlowTests extends IntegrationTestSupport {
             assertThat(issued.statusCode()).withFailMessage(issued.body()).isEqualTo(201);
             UUID billId = UUID.fromString(json(issued).path("bill").path("id").asText());
 
-            assertThat(awaitBillStatus(billId, customer, "PAID")).withFailMessage("Auto-pay did not settle the bill")
+            assertThat(awaitBillStatus(billId, customer, "PAID"))
+                    .withFailMessage(() -> "Auto-pay did not settle the bill. " + autoPayDiagnostics(billId)).isTrue();
+            // The listener runs outside @ApplicationModuleListener, so check Spring Modulith still tracks it to completion.
+            assertThat(awaitAutoPayPublicationCompleted(billId))
+                    .withFailMessage(() -> "The auto-pay event publication was not completed. " + autoPayDiagnostics(billId))
                     .isTrue();
             assertThat(db.sql("""
                     SELECT count(*) FROM payment_transactions t JOIN payment_allocations a ON a.payment_transaction_id=t.id
@@ -181,6 +185,32 @@ class BillingPaymentFlowTests extends IntegrationTestSupport {
             long current = json(call("GET", "/consumers/me", null, customer, null)).path("account").path("version").asLong();
             call("PATCH", "/consumers/me/auto-pay", Map.of("enabled", false, "version", current), customer, null);
         }
+    }
+
+    private boolean awaitAutoPayPublicationCompleted(UUID billId) throws Exception {
+        for (int attempt = 0; attempt < 40; attempt++) {
+            if (db.sql("""
+                    SELECT count(*) FROM event_publication WHERE listener_id LIKE '%AutoPayService%'
+                    AND serialized_event LIKE ? AND completion_date IS NOT NULL
+                    """).param("%" + billId + "%").query(Long.class).single() == 1) {
+                return true;
+            }
+            Thread.sleep(250);
+        }
+        return false;
+    }
+
+    /** What happened to an auto-pay charge: the bill's payments, and whether the listener's publication completed. */
+    private String autoPayDiagnostics(UUID billId) {
+        var payments = db.sql("""
+                SELECT t.payment_method || ':' || t.status FROM payment_transactions t
+                JOIN payment_allocations a ON a.payment_transaction_id=t.id WHERE a.bill_id=?
+                """).param(billId).query(String.class).list();
+        var publications = db.sql("""
+                SELECT coalesce(status, '') || ' completed=' || (completion_date IS NOT NULL) FROM event_publication
+                WHERE listener_id LIKE '%AutoPayService%' AND serialized_event LIKE ?
+                """).param("%" + billId + "%").query(String.class).list();
+        return "Payments for the bill: " + payments + "; auto-pay publications: " + publications;
     }
 
     private boolean awaitBillStatus(UUID billId, String token, String status) throws Exception {
