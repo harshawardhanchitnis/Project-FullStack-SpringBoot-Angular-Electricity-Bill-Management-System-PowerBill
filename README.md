@@ -72,6 +72,7 @@ Optional profiles:
 | --- | --- | --- |
 | Observability | `docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d` | Prometheus on `127.0.0.1:9090` and Grafana on `127.0.0.1:3000` with a provisioned GridIQ dashboard. Set `GRAFANA_ADMIN_PASSWORD` first. |
 | Local LLM | `docker compose -f docker-compose.yml -f docker-compose.ai-local.yml up -d` | Ollama for the Copilot. Pull a model once with `docker compose exec ollama ollama pull llama3.2:3b`. Answers that introduce numbers not in the customer's data are rejected in favour of the deterministic answer. |
+| API docs (development) | `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d` | The Core API on `127.0.0.1:8081`, with Swagger UI at `/swagger-ui.html` and the OpenAPI document at `/v3/api-docs`. Loopback only; do not use it for a shared deployment. |
 
 ## Checks
 

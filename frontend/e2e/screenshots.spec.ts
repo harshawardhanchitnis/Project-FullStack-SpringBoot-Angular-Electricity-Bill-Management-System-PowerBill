@@ -33,6 +33,8 @@ test('energy and simulator', async ({ page }) => {
   await page.getByRole('button', { name: 'Run simulation' }).click();
   await expect(page.getByText('Yearly savings')).toBeVisible({ timeout: 30_000 });
   await settle(page);
+  // Full-page captures start from the top, so the sticky header and sidebar do not land over the content.
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: `${OUT}/energy-simulator.png`, fullPage: true });
 });
 
@@ -41,6 +43,7 @@ test('executive overview', async ({ page }) => {
   await signIn(page, 'admin', /\/ops\/dashboard$/);
   await expect(page.getByRole('heading', { name: /Regional performance/ })).toBeVisible({ timeout: 30_000 });
   await settle(page);
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: `${OUT}/executive-overview.png`, fullPage: true });
 });
 

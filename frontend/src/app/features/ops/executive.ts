@@ -128,7 +128,8 @@ interface Region {
             <tbody>
               @for (region of data()!.regions; track region.regionZone) {
                 <tr>
-                  <td class="font-medium">{{ region.regionZone }}<span class="block text-xs text-faint">{{ region.city }}</span></td>
+                  <td class="font-medium">{{ region.regionZone }}@if (region.city && region.city !== region.regionZone) {
+                    <span class="block text-xs text-faint">{{ region.city }}</span>}</td>
                   <td class="num text-right">{{ region.meters }}</td>
                   <td class="num text-right">{{ region.meteredKwh | kwh }}</td>
                   <td class="num text-right">{{ region.billedKwh | kwh }}</td>
