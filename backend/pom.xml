@@ -17,7 +17,7 @@
     <spring-modulith.version>2.2.0</spring-modulith.version>
     <springdoc.version>3.2.1</springdoc.version>
     <openpdf.version>2.4.0</openpdf.version>
-    <zxing.version>3.5.3</zxing.version>
+    <zxing.version>3.5.4</zxing.version>
   </properties>
   <dependencyManagement>
     <dependencies>
@@ -66,12 +66,12 @@
     <dependency>
       <groupId>com.bucket4j</groupId>
       <artifactId>bucket4j_jdk17-lettuce</artifactId>
-      <version>8.18.0</version>
+      <version>8.23.0</version>
     </dependency>
     <dependency>
       <groupId>org.bouncycastle</groupId>
       <artifactId>bcprov-jdk18on</artifactId>
-      <version>1.85</version>
+      <version>1.87</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -136,7 +136,7 @@
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
-        <version>0.8.14</version>
+        <version>0.8.16</version>
         <executions>
           <execution>
             <goals>
