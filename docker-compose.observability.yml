@@ -3,7 +3,7 @@
 # Prometheus scrapes the Core API and the ML service on the internal app network; both UIs bind to loopback only.
 services:
   prometheus:
-    image: prom/prometheus:v3.5.0
+    image: prom/prometheus:v3.16.0
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
