@@ -1,0 +1,19 @@
+package com.powerbill.consumer;
+
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.util.UUID;
+import java.util.List;
+
+public interface MeterDirectory {
+    Meter customerMeter(UUID userId, UUID meterId);
+    Meter meter(UUID meterId);
+    List<Meter> demoMeters();
+
+    /** Meters whose serial contains the text (case-insensitive), for staff tools. */
+    List<Meter> searchMeters(String text, int limit);
+
+    record Meter(UUID id, UUID premiseId, String meterSerial, String connectionType,
+            BigDecimal sanctionedLoadKw, boolean solarNetMetering, BigDecimal solarCapacityKw,
+            UUID tariffPlanId, String status, OffsetDateTime installedAt, long version) {}
+}

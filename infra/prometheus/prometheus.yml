@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: gridiq-core
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["backend:8080"]
+        labels:
+          service: core-api
+
+  - job_name: gridiq-ml
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ml-service:8000"]
+        labels:
+          service: ml-service

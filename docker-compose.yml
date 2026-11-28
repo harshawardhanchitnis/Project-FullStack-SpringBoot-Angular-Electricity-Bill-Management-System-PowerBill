@@ -1,0 +1,134 @@
+name: powerbill-gridiq
+
+services:
+  postgres-timescale:
+    image: timescale/timescaledb:latest-pg17@sha256:2f5e6969faa5cd7f4b075d65f124e30dc50d456b7b807e5c1acd9d51ba7df51c
+    environment:
+      POSTGRES_DB: ${DB_NAME:-powerbill}
+      GRIDIQ_DB_USER: ${DB_USER:-powerbill}
+      GRIDIQ_DB_PASSWORD: ${DB_PASSWORD:-}
+      GRIDIQ_APP_PROFILE: ${APP_PROFILE:-dev}
+      TS_TELEMETRY: "off"
+      NO_TS_TUNE: "true"
+    entrypoint: ["/bin/sh", "/opt/gridiq/start-postgres.sh"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - postgres-credentials:/run/gridiq/db
+      - ./infra/docker/start-postgres.sh:/opt/gridiq/start-postgres.sh:ro
+      - ./infra/docker/init-postgres.sql:/docker-entrypoint-initdb.d/020_gridiq_role.sql:ro
+    networks: [data]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'PGPASSWORD=$$(cat /run/gridiq/db/db-password) psql -h 127.0.0.1 -U "$$GRIDIQ_DB_USER" -d "$$POSTGRES_DB" -qAtc "SELECT 1" | grep -qx 1'
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  redis:
+    image: redis:7.2-alpine@sha256:2f66de68111e64c3927859f158f8e666066dae2b97d9f82770a6f37a5aa1c335
+    environment:
+      GRIDIQ_REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    entrypoint: ["/bin/sh", "/opt/gridiq/start-redis.sh"]
+    volumes:
+      - redis-72-data:/data
+      - redis-credentials:/run/gridiq/cache
+      - ./infra/docker/start-redis.sh:/opt/gridiq/start-redis.sh:ro
+    networks: [data]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH=$$(cat /run/gridiq/cache/redis-password) redis-cli ping | grep -qx PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:v1.31.3@sha256:ed9b00c609e77e99c79b93f1178255ebc271868920f2c69a8d166bd5634ed10d
+    user: "10001:10001"
+    ports:
+      - "${COMPOSE_BIND_ADDRESS:-127.0.0.1}:${MAILPIT_PORT:-8025}:8025"
+    networks: [app]
+
+  backend:
+    build: ./backend
+    environment:
+      SPRING_PROFILES_ACTIVE: ${APP_PROFILE:-dev}
+      DB_HOST: postgres-timescale
+      DB_NAME: ${DB_NAME:-powerbill}
+      DB_USER: ${DB_USER:-powerbill}
+      REDIS_HOST: redis
+      SMTP_HOST: mailpit
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://127.0.0.1:${WEB_PORT:-8080}}
+      JWT_SECRET: ${JWT_SECRET:-}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET:-}
+      INTERNAL_ML_API_KEY: ${INTERNAL_ML_API_KEY:-}
+      ML_SERVICE_URL: http://ml-service:8000
+    volumes:
+      - postgres-credentials:/run/gridiq/db:ro
+      - redis-credentials:/run/gridiq/cache:ro
+      - ml-credentials:/run/gridiq/ml:ro
+    networks: [app, data]
+    depends_on:
+      postgres-timescale:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --output, /dev/null, http://localhost:8080/actuator/health/readiness]
+      interval: 5s
+      timeout: 4s
+      retries: 24
+      start_period: 20s
+
+  ml-service:
+    build: ./ml-service
+    entrypoint: ["/bin/sh", "/opt/gridiq/start-ml.sh"]
+    environment:
+      GRIDIQ_ML_API_KEY: ${INTERNAL_ML_API_KEY:-}
+      GRIDIQ_ML_COPILOT_PROVIDER: ${COPILOT_PROVIDER:-deterministic}
+      GRIDIQ_ML_LLM_API_KEY: ${LLM_API_KEY:-}
+      GRIDIQ_ML_OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      GRIDIQ_ML_OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      GRIDIQ_ML_WORKERS: ${ML_WORKERS:-2}
+    volumes:
+      - ml-credentials:/run/gridiq/ml
+      - ./infra/docker/start-ml.sh:/opt/gridiq/start-ml.sh:ro
+    networks: [app]
+    healthcheck:
+      test: [CMD, python, -c, "from urllib.request import urlopen; urlopen('http://localhost:8000/health', timeout=2).close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "${COMPOSE_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:8080"
+    networks: [app]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1:8080/ && wget -q -O /dev/null http://127.0.0.1:8080/api/v1/status']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  app:
+  data:
+    internal: true
+
+volumes:
+  postgres-data:
+  postgres-credentials:
+  redis-72-data:
+  redis-credentials:
+  ml-credentials:

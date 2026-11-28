@@ -1,101 +1,108 @@
-# Electricity Bill Management System (PowerBill)
+# PowerBill GridIQ
 
-## PROJECT – ELECTRICITY BILL MANAGEMENT SYSTEM (POWERBILL)
+GridIQ is a utility customer information and billing platform for Indian electricity distribution. It turns hourly
+smart meter (AMI) readings into transparent, itemized bills under telescopic slab, time-of-day and rooftop solar
+net-metering tariffs. Customers see every rupee explained and receive bill-shock warnings before the month ends.
+Utility staff run billing cycles, investigate anomalies and work an SLA-tracked support desk. The stack runs locally
+with free, open-source components and no paid API keys.
 
-## Project Overview
-The **Electricity Bill Management System (PowerBill)** is a **Full-stack web application** designed to simplify and digitize the management of electricity bills for both customers and administrators.  
-The backend is built using **Spring Boot** with a **microservices architecture**, separating the `Customer Service` and `Admin Service` components, which communicate through a **Eureka Server** for service discovery. Data is stored in an **H2 in-memory database** for lightweight persistence, and **Swagger UI** is integrated for API documentation and testing.  
+```mermaid
+flowchart LR
+    Browser[Angular 21 SPA] --> Nginx[Nginx · CSP · same origin]
+    Nginx -->|/api/v1| Core[Spring Boot 4 + Spring Modulith Core API]
+    Core --> PG[(PostgreSQL 17 + TimescaleDB)]
+    Core --> Redis[(Redis 7)]
+    Core --> Mail[Mailpit SMTP]
+    Core -->|internal key| ML[FastAPI ML service]
+    ML -.optional.-> LLM[Ollama / OpenAI / Gemini]
+```
 
-The frontend, developed using **Angular 15** and styled with **SCSS**, delivers a **responsive, user-friendly interface** for bill tracking, payment processing, and administrative control. The application is divided into **Customer** and **Admin** modules, each tailored for their respective roles.  
+## Screenshots
 
----
+| Customer dashboard (light) | Customer dashboard (dark) |
+| --- | --- |
+| ![Customer dashboard with projected bill, slab progress and a comparison with similar homes](docs/screenshots/customer-dashboard-light.png) | ![The same dashboard in the dark theme](docs/screenshots/customer-dashboard-dark.png) |
+| **Energy and what-if simulator** | **Energy Copilot** |
+| ![Usage heatmap, period comparison and the load-shift and rooftop solar simulator](docs/screenshots/energy-simulator.png) | ![The Copilot drawer answering why a bill changed, citing the customer's own figures](docs/screenshots/copilot-drawer.png) |
 
-## Motivation
-Traditional electricity billing systems often rely on manual processes or outdated interfaces, which can be time-consuming, error-prone, and inconvenient for both service providers and customers. **PowerBill** was developed to:  
+![Executive overview with revenue, receivables aging, anomalies, SLA compliance and regional performance](docs/screenshots/executive-overview.png)
 
-- Provide customers with **real-time access** to their billing information and payment options.  
-- Equip administrators with a **centralized platform** to manage customers, bills, and payments efficiently.  
-- Modernize bill management through **secure, scalable, and easy-to-use** web technologies.  
+Refresh them against a running demo stack with `CAPTURE_SCREENSHOTS=1 E2E_DEMO_PASSWORD=<DEMO_PASSWORD> npx playwright test screenshots`
+from `frontend`.
 
----
+## What it does
 
-## Steps Undertaken
+| Area | Highlights |
+| --- | --- |
+| Smart metering | Hourly TimescaleDB hypertable with continuous aggregates, VEE checks (load, export, voltage, power factor), CSV and Green Button ESPI import and export, estimation and audited corrections, staff VEE tools for inspecting flagged and missing hours, and a 12-month AMI simulator with injected tamper, flatline and night-baseload scenarios |
+| Tariff engine | Effective-dated, versioned plans with telescopic slabs, time-of-day windows, solar carry-forward or cash credit, fixed charge per kW, FAC, electricity duty and GST, all computed with `BigDecimal` to the paisa, plus a what-if simulator for load shifting and rooftop solar payback |
+| Billing and payments | Immutable invoices enforced by a database trigger, idempotent batch billing runs with dry-run preview, credit and debit notes, accrued late fees, a double-entry ledger whose journals must balance at commit, atomic multi-bill checkout with `Idempotency-Key`, auto-pay, a payment gateway interface with an HMAC-SHA256 signed sandbox, and PDF invoices and receipts with QR codes |
+| Support and outages | Complaint state machine with SLA deadlines and breach sweeps, public replies and internal notes, CSAT, and outage incidents targeted by pincode |
+| Notifications | Spring Modulith events drive in-app notifications, live Server-Sent Events fanned out across instances through Redis pub/sub, and HTML email through Mailpit |
+| Intelligence | Quantile gradient-boosting and Holt-Winters cycle forecasts priced through the real tariff engine, explainable anomaly detection (rules plus Isolation Forest), and an Energy Copilot and agent triage assistant whose numbers always come from the ledger |
+| Customer insight | An anonymous comparison with similar homes (same connection type and load band, shown only when at least four peers exist), bill-shock warnings against a monthly budget, and CSV export of bills and payments |
+| Operations | Executive KPIs (billed vs collected, collection efficiency, aging, slab mix, anomalies, SLA compliance) with a regional loss-proxy and collection table, a consumer 360° view with contact, budget and meter changes, a tariff studio with a draft editor, a support desk with table and Kanban views, a Ctrl+K command palette, RBAC for five roles and an append-only audit trail with recorded state |
 
-### 1. Backend Development (Spring Boot Microservices)
-**Architecture:**
-- **Customer Service** → Handles customer registration, authentication, bill retrieval, payments, and profile management.  
-- **Admin Service** → Manages customer records, bill generation, payment status updates, and complaint handling.  
-- **Eureka Server** → Provides service discovery for seamless communication between microservices.  
+## Run locally
 
-**Implementation Steps:**
-- Created entity classes (`Customer`, `Bill`) with proper relationships.  
-- Implemented **CRUD operations** for customers and bills using **Spring Data JPA**.  
-- Configured **H2 database** for persistent data storage.  
-- Exposed secure **RESTful APIs** for both modules.  
-- Integrated **Swagger UI** for API documentation and testing.  
+1. Start Docker. Copy the example environment file and enable the demo data:
 
----
+   ```sh
+   cp .env.example .env
+   # then set DEMO_MODE=true and DEMO_PASSWORD to a local password of 12+ characters
+   ```
 
-### 2. Frontend Development (Angular 15 + SCSS)
-**Modules:**
-- **Customer Module:**
-  - Secure registration and login.  
-  - View, download, and pay bills (individually or in bulk).  
-  - Manage profile information.  
-  - Track payment history in real-time.  
+2. Build and start the stack:
 
-- **Admin Module:**
-  - Manage customer accounts.  
-  - Generate new bills and update payment statuses.  
-  - Handle complaints and queries.  
-  - Perform CRUD operations on customers and bills.  
-  - Monitor system activities.  
+   ```sh
+   docker compose up --build --wait
+   ```
 
-**Key Angular Features Implemented:**
-- Component-driven architecture for scalability and maintainability.  
-- Angular directives (`*ngIf`, `*ngFor`, `ngModel`, `ngSubmit`) for dynamic rendering and data binding.  
-- Form validation to prevent invalid or incomplete submissions.  
-- HttpClient integration for real-time API communication.  
-- Bootstrap for responsiveness and **Font Awesome** for intuitive icons.  
+3. Open [GridIQ](http://127.0.0.1:8080/) and sign in with a [demo account](docs/DEMO_ACCOUNTS.md). The first start
+   seeds 12 months of hourly readings, 150 invoices, 112 payments, support tickets, outages and anomalies, which takes
+   about a minute. [Mailpit](http://127.0.0.1:8025/) shows every email the platform sends.
 
----
+Compose generates database, Redis and ML service credentials on first start and keeps them in named volumes. Only the
+web app and Mailpit bind to the host, on loopback. Stop the stack with `docker compose down`; add `-v` to delete the
+data and start over.
 
-### 3. Integration
-- Established **frontend-backend communication** using REST APIs.  
-- Implemented **cross-module authentication and authorization**.  
-- Ensured **real-time synchronization** between customer and admin operations.  
+Optional profiles:
 
----
+| Profile | Command | Adds |
+| --- | --- | --- |
+| Observability | `docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d` | Prometheus on `127.0.0.1:9090` and Grafana on `127.0.0.1:3000` with a provisioned GridIQ dashboard. Set `GRAFANA_ADMIN_PASSWORD` first. |
+| Local LLM | `docker compose -f docker-compose.yml -f docker-compose.ai-local.yml up -d` | Ollama for the Copilot. Pull a model once with `docker compose exec ollama ollama pull llama3.2:3b`. Answers that introduce numbers not in the customer's data are rejected in favour of the deterministic answer. |
+| API docs (development) | `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d` | The Core API on `127.0.0.1:8081`, with Swagger UI at `/swagger-ui.html` and the OpenAPI document at `/v3/api-docs`. Loopback only; do not use it for a shared deployment. |
 
-## Key Insights
-- Microservices architecture enhances **scalability** and **modularity** for future upgrades.  
-- Using **H2 database** during development speeds up testing and deployment cycles.  
-- **Swagger UI** proved invaluable for testing and verifying API endpoints.  
-- Angular’s **two-way data binding** and modular components reduced development time and improved UI/UX.  
+## Checks
 
----
+| Component | Command | Current result |
+| --- | --- | --- |
+| Core API, from `backend` | `./mvnw verify` (`mvnw.cmd verify` on Windows) | 52 tests: Testcontainers integration suites, unit tests for the AI service and error handling, 26 tariff engine cases and the Spring Modulith boundary check; 87% line coverage (JaCoCo report in `target/site/jacoco`) |
+| ML service, from `ml-service` in a Python 3.12+ venv | `pip install -e '.[dev]'`, `ruff check .`, `pytest --cov=app` | 75 tests with 91% coverage, including forecast MAPE under 15%, midnight IST alignment, recall of three injected anomaly scenarios and the copilot grounding guard |
+| Frontend, from `frontend` | `npm ci`, `npm run lint`, `npm test`, `npm run build` | Lint clean, 21 unit tests, 343 kB initial bundle (91 kB gzipped) with no budget warnings |
+| End-to-end, from `frontend` with the demo stack running | `E2E_DEMO_PASSWORD=<DEMO_PASSWORD> npm run e2e` | 22 Playwright journeys covering security headers, payments, Copilot, complaints, staff workflows, account switching, the command palette, VEE tools, the Kanban desk, auto-pay, and a clean console with no horizontal scroll at 375, 768 and 1440 px |
+| Load | see [k6-smoke.js](tests/load/k6-smoke.js); add `K6_PROFILE=mixed` for the mixed workload | Smoke, 25 virtual users: p95 of 9 ms with 0% errors over 7,410 requests. Mixed, 100 virtual users plus forecasts, Copilot chat and the executive overview: p95 of 10 ms (Copilot 35 ms) with 0% errors over 29,283 requests |
 
-## Challenges and Lessons Learned
-- **Service Coordination:** Proper configuration of Eureka Server and microservice endpoints was crucial for stability.  
-- **Form Validation:** Required careful handling to ensure smooth user experience without blocking valid entries.  
-- **UI Responsiveness:** Adjustments were needed to make the SCSS designs adaptable across devices.  
+## Documentation
 
----
+- [Architecture and decisions](docs/ARCHITECTURE.md)
+- [API guide](docs/API_GUIDE.md)
+- [Security](docs/SECURITY.md)
+- [Demo accounts](docs/DEMO_ACCOUNTS.md) and the [5-minute walkthrough](docs/DEMO_WALKTHROUGH.md)
+- [Contributing](CONTRIBUTING.md)
 
-## Future Work
-- Integrate a **real payment gateway** for live transactions.  
-- Add **analytics dashboards** for admins to monitor revenue and usage trends.  
-- Implement **role-based access control (RBAC)** for finer-grained permissions.  
-- Deploy to a cloud platform with a production-grade database (e.g., PostgreSQL or MySQL).  
+## Project layout
 
----
+```text
+backend/      Spring Boot 4 + Spring Modulith Core API (identity, consumer, metering, tariff, billing, payment,
+              support, notification, analytics, audit) with Flyway migrations
+ml-service/   FastAPI forecasting, anomaly detection and copilot service with a local knowledge base
+frontend/     Angular 21 zoneless SPA (customer portal and operations portal) and Playwright tests
+infra/        Nginx, Compose start scripts, Prometheus and Grafana provisioning
+tests/load/   k6 load smoke test
+docs/         Architecture, API, security and demo guides
+```
 
-## Conclusion
-The **Electricity Bill Management System (PowerBill)** successfully combines a **robust Spring Boot backend** with a **modern Angular frontend** to deliver an efficient, scalable, and user-friendly platform for bill management. The project demonstrates expertise in full-stack development, microservices architecture, API integration, and responsive UI design.  
-
----
-
-## Closing Remarks
-This project was a valuable experience in **full-stack development**, covering backend microservices, frontend frameworks, API integration, and responsive design principles. By implementing **secure, modular, and scalable** systems, PowerBill sets the foundation for future enhancements in smart billing solutions.  
-
-🚀 PowerBill represents a **next-generation approach** to utility bill management — fast, secure, and user-centric.
+GridIQ source is MIT licensed. The original training project is preserved at the `legacy-ilp-archive` Git tag.
+Demonstration tariffs are illustrative and are not issued by any electricity regulator.

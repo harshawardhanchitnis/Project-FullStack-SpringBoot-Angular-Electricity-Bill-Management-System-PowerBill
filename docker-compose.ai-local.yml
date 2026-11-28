@@ -1,0 +1,21 @@
+# Optional local LLM for the Energy Copilot. Start with:
+#   docker compose -f docker-compose.yml -f docker-compose.ai-local.yml up -d
+# then pull a model once:  docker compose exec ollama ollama pull llama3.2:3b
+# The copilot keeps its deterministic, grounded answer whenever the model is slow, missing or ungrounded.
+services:
+  ollama:
+    image: ollama/ollama:0.12.3
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [app]
+
+  ml-service:
+    environment:
+      GRIDIQ_ML_COPILOT_PROVIDER: ollama
+      GRIDIQ_ML_OLLAMA_URL: http://ollama:11434
+      GRIDIQ_ML_LLM_TIMEOUT_SECONDS: "25"
+    depends_on:
+      - ollama
+
+volumes:
+  ollama-models:
