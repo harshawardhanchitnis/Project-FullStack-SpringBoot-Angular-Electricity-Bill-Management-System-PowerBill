@@ -169,9 +169,16 @@ class SupportNotificationFlowTests extends IntegrationTestSupport {
         assertThat(kpis.path("collectionEfficiencyPct").decimalValue().signum()).isPositive();
         assertThat(call("GET", "/ops/analytics/executive", null, customer, null).statusCode()).isEqualTo(403);
 
+        // The demo seed leaves overdue tickets open; they count as misses, so compliance cannot read 100%.
+        var sla = kpis.path("sla");
+        assertThat(sla.path("breachedOpen").asInt()).isPositive();
+        assertThat(sla.path("compliancePct").decimalValue()).isLessThan(BigDecimal.valueOf(100));
+
         // Regional breakdown: every demo city appears, with energy, collection and a loss proxy between 0 and 100%.
         var regions = kpis.path("regions");
         assertThat(regions.toString()).contains("Pune", "Mumbai");
+        // The demo bill held for a metering fault leaves validated energy unbilled in one region.
+        assertThat(regions.findValues("lossProxyPct")).anyMatch(loss -> loss.isNumber() && loss.decimalValue().signum() > 0);
         for (JsonNode region : regions) {
             assertThat(region.path("meters").asInt()).isPositive();
             if (!region.path("lossProxyPct").isNull()) {

@@ -22,12 +22,18 @@ monthly budget.
 
 ## Seeded data
 
-- Twelve months of hourly readings for 25 meters, continuing to the current hour on every start.
+- Thirteen months of hourly readings for 25 meters. Each start adds the hours since the latest reading, without
+  filling older gaps. Households of the same size use different amounts, so peer comparisons have a real spread.
 - Three anomaly scenarios for the detector: a 72-hour near-zero draw on `M-DEMO-04-1`, a night baseload jump on
   `M-DEMO-07-1` and a 48-hour zero-read flatline on `M-DEMO-12-1`. Scenarios are injected only into hours inserted
   on that start, so a fresh volume shows all three.
-- Invoices for the last six months, paid on time up to three months ago (and for even-numbered accounts two months
-  ago), so recent bills are open or overdue with accrued late fees.
+- VEE exceptions for the staff tools on `M-DEMO-03-1`: a three-hour voltage sag the day before yesterday (flagged)
+  and a four-hour communications outage yesterday (missing hours to estimate). Open **VEE & anomalies → VEE &
+  telemetry** and search for the meter.
+- A four-day current-transformer fault on `M-DEMO-14-1` two months ago. Its flagged readings take that month below
+  the 90% coverage rule, so the bill is held, and the executive overview's regional loss proxy shows the unbilled energy.
+- Invoices for the last twelve months (about 300), paid on time up to three months ago (and for even-numbered
+  accounts two months ago), so recent bills are open or overdue with accrued late fees.
 - Six complaints in every lifecycle state, a feeder trip in Pune 411001 and planned maintenance in Mumbai 400001.
 
 Data persists across restarts. Run `docker compose down -v` to start again from an empty database.

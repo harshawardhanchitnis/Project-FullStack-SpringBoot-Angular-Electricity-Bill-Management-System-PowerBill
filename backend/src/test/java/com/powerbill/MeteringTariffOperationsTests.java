@@ -182,6 +182,30 @@ class MeteringTariffOperationsTests extends IntegrationTestSupport {
     }
 
     @Test
+    void seedsVeeExceptionsForTheStaffToolsAndHoldsTheBillTheyAffect() throws Exception {
+        String field = demoToken("field");
+        var sagMeter = json(call("GET", "/ops/metering/meters?q=M-DEMO-03-1", null, field, null)).get(0);
+        ZonedDateTime to = ZonedDateTime.now(INDIA).truncatedTo(java.time.temporal.ChronoUnit.HOURS);
+        String window = "?from=" + to.minusDays(3).toOffsetDateTime() + "&to=" + to.toOffsetDateTime();
+        var intervals = json(call("GET", "/ops/metering/meters/" + sagMeter.path("id").asText() + "/intervals"
+                + window.replace("+", "%2B"), null, field, null));
+        // A three-hour voltage sag is flagged, and a four-hour communications outage left missing hours.
+        assertThat(intervals.path("flaggedCount").asInt()).isEqualTo(3);
+        assertThat(intervals.path("missing").size()).isEqualTo(4);
+
+        // Four days of flagged readings two months back drop that month below 90% coverage, so its bill is held.
+        var held = java.time.YearMonth.now(INDIA).minusMonths(2);
+        String bills = """
+                SELECT count(*) FROM bills b JOIN smart_meters m ON m.id=b.meter_id
+                WHERE m.meter_serial='M-DEMO-14-1' AND b.billing_year=? AND b.billing_month=?
+                """;
+        assertThat(db.sql(bills).params(held.getYear(), held.getMonthValue()).query(Long.class).single()).isZero();
+        var previous = held.minusMonths(1);
+        assertThat(db.sql(bills).params(previous.getYear(), previous.getMonthValue()).query(Long.class).single())
+                .isEqualTo(1);
+    }
+
+    @Test
     void reportsTheCopilotAsUnavailableWhenTheMlServiceIsOff() throws Exception {
         var response = call("POST", "/ai/copilot/chat", Map.of("message", "Why is my bill high?"),
                 demoToken("customer14"), null);

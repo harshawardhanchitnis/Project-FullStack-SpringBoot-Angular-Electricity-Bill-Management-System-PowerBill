@@ -67,7 +67,8 @@ class DemoBilling implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         YearMonth current = YearMonth.now(BillingService.INDIA);
         int issued = 0;
-        for (int back = 6; back >= 1; back--) {
+        // A full year of invoices, so the executive revenue chart and each customer's history have no empty months.
+        for (int back = 12; back >= 1; back--) {
             YearMonth month = current.minusMonths(back);
             // Issue each bill on the second day after its period so historical due dates look realistic.
             LocalDate issueDate = month.plusMonths(1).atDay(2);

@@ -20,9 +20,11 @@ Start the stack with demo data as described in the [README](../README.md), open 
 ## 2. The utility view (2 minutes)
 
 1. Sign in as `admin@demo.powerbill.invalid`. The executive overview shows billed versus collected revenue, collection
-   efficiency, receivables aging, the slab mix, open anomalies and SLA compliance.
+   efficiency, receivables aging, the slab mix, open anomalies and SLA compliance, where open tickets that have
+   already breached count as misses. The regional table shows the energy left unbilled by a held bill.
 2. Open **VEE & anomalies**. Each finding has a score and plain-language reasons, such as a 72-hour near-zero draw
-   below the meter's own 28-day median. Confirm one as tamper.
+   below the meter's own 28-day median. Confirm one as tamper. Then open **VEE & telemetry**, find `M-DEMO-03-1`,
+   choose the last 3 days, estimate a missing hour and revise the flagged voltage-sag readings with a reason.
 3. Open **Support desk & outages**, choose the critical outage ticket and run **AI triage**. It links the ticket to the
    declared feeder trip and drafts a reply. Use it, then resolve the ticket with a summary.
 4. In **Billing & runs**, preview last month's run, then issue a credit note on a bill and show it on the invoice.

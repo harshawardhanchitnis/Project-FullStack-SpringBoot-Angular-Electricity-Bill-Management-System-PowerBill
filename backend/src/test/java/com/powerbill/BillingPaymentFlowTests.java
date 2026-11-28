@@ -154,9 +154,10 @@ class BillingPaymentFlowTests extends IntegrationTestSupport {
         assertThat(enabled.statusCode()).withFailMessage(enabled.body()).isEqualTo(200);
         assertThat(json(enabled).path("autoPayEnabled").asBoolean()).isTrue();
         try {
-            // A month with readings but no demo invoice yet; issuing it triggers the mandate.
+            // The demo seed bills twelve months but simulates thirteen, so this month has readings and no invoice;
+            // issuing it triggers the mandate.
             String meterId = json(call("GET", "/consumers/me/meters", null, customer, null)).get(0).path("id").asText();
-            var month = YearMonth.now(ZoneId.of("Asia/Kolkata")).minusMonths(8);
+            var month = YearMonth.now(ZoneId.of("Asia/Kolkata")).minusMonths(13);
             var issued = call("POST", "/ops/bills/generate", Map.of("meterId", meterId, "year", month.getYear(),
                     "month", month.getMonthValue()), demoToken("billing"), null);
             assertThat(issued.statusCode()).withFailMessage(issued.body()).isEqualTo(201);

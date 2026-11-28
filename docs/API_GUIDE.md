@@ -94,7 +94,7 @@ return `{content, page, size, totalElements}`.
 | `GET /analytics/consumer/overview?meterId` | Customer | Cycle usage, slab position, 12-month history, hourly profile, time-of-day split, receivables, outages and `peers`: the last 30 days against the median and quartiles of meters with the same connection type and load band (null when fewer than four peers) |
 | `GET /ai/forecast/{meterId}` | Customer | P10/P50/P90 energy and bill for the cycle, net days to the next slab after any solar credit, model name and `source` (`ml` or `fallback`). 30 requests a minute per user |
 | `POST /ai/copilot/chat` | Customer | `{message, meterId?, history?}`. 20 requests a minute per user, shared with triage; over the limit returns 429 with `Retry-After` |
-| `GET /ops/analytics/executive` | Staff | Revenue, collection efficiency, aging, slab mix, anomalies, SLA statistics and `regions` (metered vs billed kWh as a loss proxy, collection efficiency, overdue amount and open anomalies per region for the last three billed months) |
+| `GET /ops/analytics/executive` | Staff | Revenue, collection efficiency, aging, slab mix, anomalies, SLA statistics (compliance is tickets resolved within SLA in the last 90 days over those resolved plus open tickets already breached) and `regions` (metered vs billed kWh as a loss proxy, collection efficiency, overdue amount and open anomalies per region for the last three billed months) |
 | `POST /ops/ai/complaints/{id}/triage` | Support, field, admin | Summary, likely cause, evidence, next steps, a suggested priority and reply, and `providerUsed` |
 | `GET /ops/audit?q` | Super admin | Audit trail filtered by action, entity or correlation ID. Entries include `actorName`, `actorEmail` and the recorded `afterState` |
 

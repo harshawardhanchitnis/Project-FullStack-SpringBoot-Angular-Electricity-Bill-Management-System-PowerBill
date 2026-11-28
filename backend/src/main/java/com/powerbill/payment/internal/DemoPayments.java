@@ -53,7 +53,8 @@ class DemoPayments implements ApplicationRunner {
         int index = 0;
         for (var account : demoAccounts.values()) {
             index++;
-            for (var bill : billing.recentBills(account.id(), 12)) {
+            // Two meters times twelve months: every demo invoice, so none older than the window is left unpaid.
+            for (var bill : billing.recentBills(account.id(), 24)) {
                 boolean settle = bill.period().isBefore(current.minusMonths(2))
                         || (bill.period().equals(current.minusMonths(2)) && index % 2 == 0);
                 if (!settle || bill.outstanding().signum() == 0 || bill.status().equals("PAID")) {

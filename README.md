@@ -59,8 +59,8 @@ from `frontend`.
    ```
 
 3. Open [GridIQ](http://127.0.0.1:8080/) and sign in with a [demo account](docs/DEMO_ACCOUNTS.md). The first start
-   seeds 12 months of hourly readings, 150 invoices, 112 payments, support tickets, outages and anomalies, which takes
-   about a minute. [Mailpit](http://127.0.0.1:8025/) shows every email the platform sends.
+   seeds 13 months of hourly readings, about 300 invoices, about 260 payments, support tickets, outages, anomalies and
+   VEE exceptions, which takes about a minute. [Mailpit](http://127.0.0.1:8025/) shows every email the platform sends.
 
 Compose generates database, Redis and ML service credentials on first start and keeps them in named volumes. Only the
 web app and Mailpit bind to the host, on loopback. Stop the stack with `docker compose down`; add `-v` to delete the

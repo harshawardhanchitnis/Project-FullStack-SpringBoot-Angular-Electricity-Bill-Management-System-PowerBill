@@ -41,11 +41,15 @@ test('a field engineer inspects a meter in the VEE tools', async ({ page }) => {
   await signIn(page, 'field', /\/ops\/dashboard$/);
   await page.getByRole('link', { name: 'VEE & anomalies' }).click();
   await page.getByRole('tab', { name: 'VEE & telemetry' }).click();
-  await page.getByLabel('Meter serial').fill('M-DEMO');
+  await page.getByLabel('Meter serial').fill('M-DEMO-03-1');
   await page.getByRole('button', { name: 'Find meter' }).click();
   await page.getByRole('list', { name: 'Matching meters' }).getByRole('button').first().click();
-  await expect(page.getByRole('heading', { name: /Intervals · M-DEMO-/ })).toBeVisible();
-  await expect(page.getByText(/\d+ readings · \d+ flagged · \d+ missing/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: /Intervals · M-DEMO-03-1/ })).toBeVisible();
+  // The demo seed plants a flagged voltage sag and a communications outage within the last few days.
+  await page.getByLabel('Window').selectOption({ label: 'Last 7 days' });
+  await expect(page.getByText(/\d+ readings · 3 flagged · 4 missing/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Revise' })).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'Estimate' })).toHaveCount(4);
   await page.getByLabel('All hours').check();
   await expect(page.getByRole('table', { name: 'Hourly intervals' }).locator('tbody tr').first()).toBeVisible();
   await expect(page.getByRole('heading', { name: 'AMI simulator' })).toBeVisible();

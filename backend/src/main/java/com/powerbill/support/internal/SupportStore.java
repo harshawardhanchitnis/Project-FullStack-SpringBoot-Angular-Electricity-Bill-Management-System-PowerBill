@@ -149,8 +149,11 @@ class SupportStore {
                 SELECT count(*) FILTER (WHERE status NOT IN ('RESOLVED','CLOSED')) AS open_tickets,
                     count(*) FILTER (WHERE status NOT IN ('RESOLVED','CLOSED') AND sla_breached) AS breached_open,
                     count(*) FILTER (WHERE resolved_at > now()-interval '90 days') AS resolved,
+                    -- Open tickets that have already breached count as misses, so a backlog of overdue work can never
+                    -- show as 100% compliance.
                     coalesce(round(100.0 * count(*) FILTER (WHERE resolved_at > now()-interval '90 days' AND NOT sla_breached)
-                        / nullif(count(*) FILTER (WHERE resolved_at > now()-interval '90 days'),0), 1), 100) AS compliance,
+                        / nullif(count(*) FILTER (WHERE resolved_at > now()-interval '90 days'
+                            OR (status NOT IN ('RESOLVED','CLOSED') AND sla_breached)),0), 1), 100) AS compliance,
                     coalesce(round(avg(extract(epoch FROM resolved_at-created_at)/3600)
                         FILTER (WHERE resolved_at > now()-interval '90 days'), 1), 0) AS resolution_hours,
                     coalesce(round(avg(csat_rating), 2), 0) AS csat

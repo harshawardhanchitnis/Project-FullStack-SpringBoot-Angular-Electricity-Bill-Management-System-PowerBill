@@ -73,7 +73,7 @@ class AutoPayService {
     int run() {
         int settled = 0;
         for (UUID accountId : accounts.autoPayAccounts()) {
-            for (var bill : billing.recentBills(accountId, 12)) {
+            for (var bill : billing.recentBills(accountId, 24)) {
                 if (PAYABLE.contains(bill.status()) && bill.outstanding().compareTo(BigDecimal.ZERO) > 0
                         && settle(accountId, bill.id())) {
                     settled++;
